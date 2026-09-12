@@ -32,7 +32,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 
 from . import audit, policy_store
-from .auth import PortalTokenVerifier, current_principal
+from .auth import current_principal, gateway_auth
 
 TransportFactory = Callable[[dict], httpx2.AsyncBaseTransport | None]
 
@@ -119,7 +119,7 @@ def build_registry_gateway(transport_factory: TransportFactory | None = None) ->
             "Tools generated from APIs registered in the Bizplay MCP portal. Tool names are "
             "prefixed with the provider id. Results are limited to the caller's own company."
         ),
-        auth=PortalTokenVerifier(),
+        auth=gateway_auth(),
     )
     prefixes: dict[str, str] = {}
     for provider in policy_store.published_registry_providers(state):

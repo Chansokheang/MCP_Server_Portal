@@ -100,6 +100,8 @@ async def config(request: Request):
         "project_dir": os.environ.get("BIZPLAY_PROJECT_DIR", str(PROJECT_ROOT)),
         "gateway_url": policy_store.public_url("curated", request.url.hostname),
         "registry_url": policy_store.public_url("registry", request.url.hostname),
+        # When false, the gateways accept anonymous HTTP callers (demo only).
+        "require_agent_token": bool(policy_store.load()["security"]["require_gateway_bearer"]),
     })
 
 

@@ -282,6 +282,50 @@ async function registerDialog() {
   };
 }
 
+/** Ready-to-paste commands. Issues a token first when the gateway needs one. */
+function commandResult(p, token) {
+  const hdr = token ? ` \\\n  --header "Authorization: Bearer ${token}"` : "";
+  const desktop = `"${p.id}": ` + JSON.stringify({
+    command: "npx",
+    args: ["-y", "mcp-remote", p.mcp_url, ...(token ? ["--header", `Authorization: Bearer ${token}`] : [])],
+  }, null, 2);
+  modal(`<h2><i class="ph ph-terminal-window"></i> Connect to ${esc(p.name)}</h2>
+    ${token ? `<p class="muted">A token was issued for this command. It is shown once, so copy the command now. Revoke it any time on the Agent Tokens page.</p>`
+            : `<p class="muted">This gateway accepts anonymous callers, so no token is needed.</p>`}
+    <h2 class="section-title" style="margin-top:14px">Claude Code, one line</h2>
+    ${codeBlock("cc-code", `claude mcp add --transport http ${p.id} ${p.mcp_url}${hdr}`)}
+    <h2 class="section-title" style="margin-top:16px">Claude Desktop, add under mcpServers</h2>
+    ${codeBlock("cc-desktop", desktop, "Needs Node.js. Restart Claude Desktop from the system tray afterwards.")}
+    <h2 class="section-title" style="margin-top:16px">Check it from a terminal</h2>
+    ${codeBlock("cc-curl", `curl -s ${p.mcp_url} \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json"${token ? ` \\\n  -H "Authorization: Bearer ${token}"` : ""} \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`)}
+    <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn solid" id="cc-done">Done</button></div>`);
+  $("#cc-done").onclick = () => { closeModal(); pages.provider(); };
+}
+
+async function commandDialog(p) {
+  if (SERVER.require_agent_token === false) return commandResult(p, null);
+  modal(`<h2><i class="ph ph-terminal-window"></i> Connect command</h2>
+    <p class="muted">Who should the agent act as? A token is issued for this command.</p>
+    <form id="cc-form" class="form">
+      <div class="form-2">
+        <label class="field">Bizplay user id <input name="user_id" value="emp001" required></label>
+        <label class="field">Role <select name="role"><option value="employee">employee</option><option value="manager">manager</option></select></label>
+        <label class="field">Company <input name="company" value="1078836129"></label>
+        <label class="field">Expires in (days) <input name="ttl_days" type="number" value="30" min="1" max="365"></label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="cc-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Create command</button></div>
+      <p class="error" id="cc-error"></p>
+    </form>`);
+  $("#cc-cancel").onclick = closeModal;
+  $("#cc-form").onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    try {
+      const r = await api("POST", "/api/tokens", { ...f, label: `${p.name} connect command`, agent: "Claude Code" });
+      commandResult(p, r.token);
+    } catch (err) { $("#cc-error").textContent = err.message; }
+  };
+}
+
 async function editDialog(p) {
   const opt = (v, label) => `<option value="${v}" ${p.auth_mode === v ? "selected" : ""}>${label}</option>`;
   modal(`<h2><i class="ph ph-pencil-simple"></i> Edit connection</h2>
@@ -447,7 +491,7 @@ Header: Authorization: Bearer ${esc(r.token)}</pre>
 
 // ---- Registered API detail: how to use this one API ----
 // Filled from /api/config at sign-in: the server knows where it keeps the project.
-let SERVER = { project_dir: "/path/to/bizplay-mcp-server" };
+let SERVER = { project_dir: "/path/to/bizplay-mcp-server", require_agent_token: true };
 const LOCAL_HOST = /^(127\.|localhost$|::1$|0\.0\.0\.0$)/;
 const hostOf = (url) => { try { return new URL(url).hostname; } catch { return ""; } };
 
@@ -473,10 +517,13 @@ function clientGuides(p, tools) {
     args: ["--directory", SERVER.project_dir, "run", "--no-sync", "python", "-m", localModule],
     env,
   }, null, 2);
+  // With the agent-token requirement switched off there is no header to send.
+  const needsToken = SERVER.require_agent_token !== false;
   const remoteCfg = `"${p.id}": ` + JSON.stringify({
     command: "npx",
-    args: ["-y", "mcp-remote", p.mcp_url, "--header", "Authorization: Bearer <YOUR_AGENT_TOKEN>"],
+    args: ["-y", "mcp-remote", p.mcp_url, ...(needsToken ? ["--header", "Authorization: Bearer <YOUR_AGENT_TOKEN>"] : [])],
   }, null, 2);
+  const headerArg = needsToken ? ` \\\n  --header "Authorization: Bearer <YOUR_AGENT_TOKEN>"` : "";
   const endpointIsLocal = LOCAL_HOST.test(hostOf(p.mcp_url));
 
   return {
@@ -497,9 +544,13 @@ function clientGuides(p, tools) {
     },
     "claude-code": {
       label: "Claude Code", icon: "terminal-window", ready: true,
-      lead: `Claude Code calls this API over HTTP at ${p.mcp_url} and sends an agent token as a header. Issue a token on the Agent Tokens page first.`,
+      lead: needsToken
+        ? `Claude Code calls this API over HTTP at ${p.mcp_url} and sends an agent token as a header. Use Connect command above to get a line with the token already in it.`
+        : `This gateway accepts anonymous callers, so one line with no token connects Claude Code to ${p.mcp_url}.`,
       steps: [
-        { t: "Add the server", b: codeBlock("g-code-1", `claude mcp add --transport http ${p.id} ${p.mcp_url} \\\n  --header "Authorization: Bearer <YOUR_AGENT_TOKEN>"`, "The token is shown once, when issued. Its user, role and company decide what this API returns.") },
+        { t: "Add the server", b: codeBlock("g-code-1", `claude mcp add --transport http ${p.id} ${p.mcp_url}${headerArg}`,
+          needsToken ? "The token is shown once, when issued. Its user, role and company decide what this API returns."
+                     : "No credential is required because the agent-token requirement is switched off on the Security page.") },
         { t: "Check it connected", b: codeBlock("g-code-2", `claude mcp list`) },
         { t: "Remove it later", b: codeBlock("g-code-3", `claude mcp remove ${p.id}`) },
       ],
@@ -569,6 +620,7 @@ pages.provider = async () => {
       </div>
       <p class="card-desc" style="-webkit-line-clamp:3">Spec from ${esc(p.spec_source)}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream API accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : "The gateway sends a stored service token on every call."}</p>
       <div class="card-actions">
+        <button class="btn small solid" data-act="command"><i class="ph ph-terminal-window"></i> Connect command</button>
         <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit connection</button>
         <button class="btn small" data-act="test"><i class="ph ph-plugs"></i> Test connection</button>
         <button class="btn small" data-act="access"><i class="ph ph-sliders-horizontal"></i> Manage tools</button>
@@ -596,14 +648,11 @@ pages.provider = async () => {
     <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Tokens are shown once, so issue a new one and revoke the old if you lost it.</span></div>`;
 
   $("#back-registry").onclick = () => { location.hash = "registry"; };
-  $("#page").querySelectorAll(".copy").forEach((b) => b.onclick = () => {
-    const text = $("#" + b.dataset.copy)?.textContent || "";
-    navigator.clipboard?.writeText(text).then(() => toast("Copied", "Paste it into your client"));
-  });
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     const act = b.dataset.act;
     try {
       if (act === "access") { setHash("access", { p: pid }); return; }
+      if (act === "command") return commandDialog(p);
       if (act === "edit") return editDialog(p);
       if (act === "test") return testDialog(pid);
       if (act === "delete") {
@@ -632,7 +681,7 @@ pages.security = async () => {
             <label class="check"><input type="checkbox" class="switch" data-s="confirm_on_write" ${s.confirm_on_write ? "checked" : ""}> Force user confirmation on all write tools</label>
             <label class="field">Default agent token lifetime (days) <input type="number" data-s="token_ttl_days" value="${s.token_ttl_days}" min="1" max="365" style="width:140px"></label>
           </div>
-          <p class="muted small" style="margin:12px 0 0">In this mockup the bearer requirements are enforced in code; the switches record the policy. Turning one off lowers the checklist score so reviewers notice.</p>
+          <p class="muted small" style="margin:12px 0 0">The agent token switch is enforced by the gateways, which read it at startup, so restart them after changing it. Turning it off lets anyone call the gateway and lowers the checklist score. The upstream switch records policy only, since that is the provider's own API.</p>
         </div>
         <h2 class="section-title" style="margin-top:22px">Identity mapping</h2>
         <div class="cards">${Object.entries(d.identity).map(([pid, i], n) => `<div class="card"><div class="card-head"><span class="card-brand">${logo(pid, n)} ${esc(pid)}</span>${chip("lilac", i.issuer, "fingerprint")}</div><dl class="kv"><dt>user claim</dt><dd>${esc(i.user_claim)}</dd><dt>role claim</dt><dd>${esc(i.role_claim)}</dd><dt>company claim</dt><dd>${esc(i.company_claim)}</dd></dl></div>`).join("")}</div>
@@ -690,6 +739,14 @@ pages.audit = async () => {
 };
 
 // ---- boot ----
+// One handler for every copy button, on pages and inside dialogs.
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.(".copy");
+  if (!b) return;
+  const text = document.getElementById(b.dataset.copy)?.textContent || "";
+  navigator.clipboard?.writeText(text).then(() => toast("Copied", "Paste it into your terminal"));
+});
+
 // Every page renders by replacing #page, so one observer animates them all.
 new MutationObserver(() => animateIn($("#page"))).observe($("#page"), { childList: true });
 new MutationObserver(() => replay($("#tabs"), "anim")).observe($("#tabs"), { childList: true });

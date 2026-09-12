@@ -20,6 +20,27 @@ from fastmcp.server.dependencies import get_access_token
 from . import policy_store
 
 
+def agent_token_required() -> bool:
+    """Whether HTTP callers must present a portal-issued agent token.
+
+    BIZPLAY_REQUIRE_AGENT_TOKEN wins; otherwise the portal's Security switch
+    decides. Turning it off lets any client connect with no credential and the
+    identity falls back to BIZPLAY_USER_ID, BIZPLAY_ROLE and BIZPLAY_COMPANY.
+    Demos only: the gateway can no longer tell callers apart.
+    """
+    override = os.environ.get("BIZPLAY_REQUIRE_AGENT_TOKEN")
+    if override is not None:
+        return override.strip().lower() not in ("0", "false", "no", "off")
+    try:
+        return bool(policy_store.load()["security"]["require_gateway_bearer"])
+    except Exception:
+        return True
+
+
+def gateway_auth() -> "PortalTokenVerifier | None":
+    return PortalTokenVerifier() if agent_token_required() else None
+
+
 class PortalTokenVerifier(TokenVerifier):
     """Verifies gateway bearer tokens against the portal's token store."""
 

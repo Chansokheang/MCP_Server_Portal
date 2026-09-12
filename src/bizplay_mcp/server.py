@@ -25,7 +25,7 @@ from pydantic import Field
 
 from . import audit, compliance, policy_store
 from .adapters import BizplayApiClient, BizplayApiError
-from .auth import PortalTokenVerifier, current_principal
+from .auth import current_principal, gateway_auth
 
 PROVIDER_ID = "bizplay"
 
@@ -37,8 +37,9 @@ mcp = FastMCP(
         "submitting an expense report, and never submit on the user's behalf "
         "without their explicit confirmation."
     ),
-    # Over HTTP, every request must carry a portal-issued bearer token.
-    auth=PortalTokenVerifier(),
+    # Over HTTP, every request must carry a portal-issued bearer token, unless
+    # the portal's Security page turns that requirement off for a demo.
+    auth=gateway_auth(),
 )
 
 def _default_api_client() -> BizplayApiClient:

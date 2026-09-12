@@ -164,6 +164,28 @@ client needs:
 | ChatGPT, Claude.ai | Remote connector, needs public HTTPS and OAuth | Not yet |
 | Copilot Studio, Agentforce | Remote MCP server, needs public HTTPS and OAuth | Not yet |
 
+### The one-line shortcut
+
+On an API's detail page, **Connect command** issues a token and prints commands
+with that token already in them: a `claude mcp add` line, a Claude Desktop
+config block using `mcp-remote`, and a curl call to check it. Copy, paste, done.
+
+### Connecting without a token
+
+The gateways require a portal-issued agent token over HTTP. For a demo you can
+turn that off on the Security page, or with `BIZPLAY_REQUIRE_AGENT_TOKEN=false`,
+which takes precedence. The gateways read the setting at startup, so restart
+them afterwards. Then this is the whole setup:
+
+```bash
+claude mcp add --transport http bizplay-classifier http://HOST:9011/mcp
+```
+
+With the requirement off the gateway cannot tell callers apart: identity falls
+back to `BIZPLAY_USER_ID`, `BIZPLAY_ROLE` and `BIZPLAY_COMPANY`, so every caller
+is the same user and company scoping applies to that one identity. Demos only.
+The Security checklist marks it red while it is off.
+
 Claude Code, after issuing a token on the Agent Tokens page:
 
 ```bash

@@ -38,6 +38,26 @@ async def test_legacy_health_is_public():
 
 
 # --- gateway verifies portal-issued agent tokens -------------------------------
+async def test_agent_token_requirement_can_be_switched_off(monkeypatch):
+    """Demo mode: no token on the gateway. Identity then comes from the environment."""
+    from bizplay_mcp import auth
+
+    assert auth.agent_token_required() is True
+    assert auth.gateway_auth() is not None
+
+    state = policy_store.load()
+    state["security"]["require_gateway_bearer"] = False
+    policy_store.save(state)
+    assert auth.agent_token_required() is False
+    assert auth.gateway_auth() is None, "no verifier means anonymous HTTP callers are accepted"
+
+    # The environment variable wins over the portal switch, in both directions.
+    monkeypatch.setenv("BIZPLAY_REQUIRE_AGENT_TOKEN", "true")
+    assert auth.agent_token_required() is True
+    monkeypatch.setenv("BIZPLAY_REQUIRE_AGENT_TOKEN", "off")
+    assert auth.agent_token_required() is False
+
+
 async def test_gateway_token_verifier():
     state = policy_store.load()
     token, record = policy_store.issue_agent_token(state, label="t", user_id="emp001", role="employee",
