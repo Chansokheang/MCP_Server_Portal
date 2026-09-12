@@ -1,0 +1,184 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Bizplay Existing REST API (mock)",
+    "version": "1.0.0",
+    "description": "Spec of the EXISTING Bizplay API, as it would be exported from Swagger. The API source code is not modified; FastMCP reads this file to generate MCP tools automatically."
+  },
+  "servers": [{ "url": "http://127.0.0.1:18080" }],
+  "paths": {
+    "/api/v1/users/{user_id}": {
+      "get": {
+        "operationId": "get_user",
+        "summary": "Get a user profile",
+        "parameters": [{ "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "User", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } } }
+      }
+    },
+    "/api/v1/cards/{card_id}": {
+      "get": {
+        "operationId": "get_card",
+        "summary": "Get a corporate card",
+        "parameters": [{ "name": "card_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Card" } } } } }
+      }
+    },
+    "/api/v1/cards/{card_id}/transactions": {
+      "get": {
+        "operationId": "list_card_transactions",
+        "summary": "List transactions on a corporate card",
+        "parameters": [
+          { "name": "card_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "month", "in": "query", "required": false, "description": "YYYY-MM", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transactions",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Transaction" } } } } } }
+          }
+        }
+      }
+    },
+    "/api/v1/transactions/{txn_id}": {
+      "get": {
+        "operationId": "get_transaction",
+        "summary": "Get one card transaction",
+        "parameters": [{ "name": "txn_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Transaction", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Transaction" } } } } }
+      }
+    },
+    "/api/v1/budgets/{department}/{month}": {
+      "get": {
+        "operationId": "get_department_budget",
+        "summary": "Get a department's monthly budget and spend",
+        "parameters": [
+          { "name": "department", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "month", "in": "path", "required": true, "description": "YYYY-MM", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Budget", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Budget" } } } } }
+      }
+    },
+    "/api/v1/expense-reports": {
+      "get": {
+        "operationId": "list_expense_reports",
+        "summary": "List expense reports",
+        "parameters": [
+          { "name": "owner_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "approver_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reports",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExpenseReport" } } } } } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_expense_report",
+        "summary": "Create a draft expense report",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["owner_id", "title", "txn_ids"],
+                "properties": {
+                  "owner_id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "txn_ids": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpenseReport" } } } } }
+      }
+    },
+    "/api/v1/expense-reports/{report_id}": {
+      "get": {
+        "operationId": "get_expense_report",
+        "summary": "Get an expense report",
+        "parameters": [{ "name": "report_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Report", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpenseReport" } } } } }
+      }
+    },
+    "/api/v1/expense-reports/{report_id}/submit": {
+      "post": {
+        "operationId": "submit_expense_report",
+        "summary": "Submit a draft report to an approver",
+        "parameters": [{ "name": "report_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["approver_id"], "properties": { "approver_id": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "Submitted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpenseReport" } } } } }
+      }
+    },
+    "/api/v1/expense-reports/{report_id}/decision": {
+      "post": {
+        "operationId": "decide_expense_report",
+        "summary": "Approve or reject a pending report",
+        "parameters": [{ "name": "report_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["decision"],
+                "properties": { "decision": { "type": "string", "enum": ["approved", "rejected"] }, "comment": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Decided", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpenseReport" } } } } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "string" }, "name": { "type": "string" }, "role": { "type": "string" },
+          "department": { "type": "string" }, "manager_id": { "type": "string", "nullable": true },
+          "card_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Card": {
+        "type": "object",
+        "properties": {
+          "card_id": { "type": "string" }, "owner_id": { "type": "string" },
+          "masked_number": { "type": "string" }, "monthly_limit": { "type": "integer" }
+        }
+      },
+      "Transaction": {
+        "type": "object",
+        "properties": {
+          "txn_id": { "type": "string" }, "card_id": { "type": "string" }, "approved_at": { "type": "string" },
+          "merchant": { "type": "string" }, "merchant_category": { "type": "string" }, "merchant_tax_type": { "type": "string" },
+          "amount": { "type": "integer" }, "has_receipt_image": { "type": "boolean" }, "memo": { "type": "string" },
+          "attendees": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Budget": {
+        "type": "object",
+        "properties": {
+          "department": { "type": "string" }, "month": { "type": "string" },
+          "budget": { "type": "integer" }, "spent": { "type": "integer" }, "remaining": { "type": "integer" }
+        }
+      },
+      "ExpenseReport": {
+        "type": "object",
+        "properties": {
+          "report_id": { "type": "string" }, "owner_id": { "type": "string" }, "title": { "type": "string" },
+          "txn_ids": { "type": "array", "items": { "type": "string" } }, "total_amount": { "type": "integer" },
+          "status": { "type": "string" }, "created_at": { "type": "string" },
+          "approver_id": { "type": "string", "nullable": true }, "decision_comment": { "type": "string" }
+        }
+      }
+    }
+  }
+}

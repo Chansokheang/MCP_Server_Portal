@@ -1,0 +1,74 @@
+# Bizplay MCP stack (demo deployment).
+#   docker compose up --build
+#
+#   portal            http://localhost:18090
+#   curated gateway   http://localhost:8000/mcp
+#   registry gateway  http://localhost:8002/mcp
+#   mock Bizplay API  http://localhost:18080  (internal name: legacy-api)
+#
+# The portal writes data/portal_state.json; both gateways read it. All three
+# share the `state` volume, and audit entries land in the `logs` volume.
+
+x-app: &app
+  build: .
+  image: bizplay-mcp:latest
+  restart: unless-stopped
+  volumes:
+    - state:/app/data
+    - logs:/app/logs
+
+services:
+  legacy-api:
+    <<: *app
+    command: ["legacy-bizplay-api", "--host", "0.0.0.0", "--port", "18080"]
+    environment:
+      # Service tokens the mock API accepts (comma-separated).
+      BIZPLAY_API_TOKENS: ${BIZPLAY_API_TOKENS:-demo-service-token}
+    ports:
+      - "18080:18080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18080/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  portal:
+    <<: *app
+    command: ["bizplay-portal", "--host", "0.0.0.0", "--port", "18090"]
+    environment:
+      # Seed the Bizplay provider with the in-network API address.
+      BIZPLAY_SEED_API_URL: http://legacy-api:18080
+    ports:
+      - "18090:18090"
+    depends_on:
+      legacy-api:
+        condition: service_healthy
+
+  gateway:
+    <<: *app
+    command: ["bizplay-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      BIZPLAY_API_BASE_URL: http://legacy-api:18080
+      BIZPLAY_API_TOKEN: ${BIZPLAY_API_TOKENS:-demo-service-token}
+    ports:
+      - "8000:8000"
+    depends_on:
+      legacy-api:
+        condition: service_healthy
+      portal:
+        condition: service_started
+
+  registry-gateway:
+    <<: *app
+    # Builds its tools from the providers published in the portal at startup.
+    # Restart this service after publishing a new provider.
+    command: ["bizplay-mcp-registry", "--transport", "http", "--host", "0.0.0.0", "--port", "8002"]
+    ports:
+      - "8002:8002"
+    depends_on:
+      portal:
+        condition: service_started
+
+volumes:
+  state:
+  logs:

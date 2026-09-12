@@ -1,0 +1,244 @@
+# Bizplay MCP Server (sample)
+
+A working prototype of the "Bizplay MCP Server Gateway" from the strategy report,
+built with [FastMCP](https://gofastmcp.com). It lets AI agents such as Claude,
+Copilot Studio, or Agentforce use Bizplay corporate card and expense functions.
+
+**The existing Bizplay API is not modified.** The MCP server is a separate
+program that calls the existing REST endpoints over HTTP, the same way the web
+or mobile app does.
+
+```
+AI agent (Claude, Copilot, Agentforce)
+        |  MCP protocol (stdio or HTTP)
+Bizplay MCP Gateway        <- NEW: this project
+  - identity and role checks
+  - Korean compliance rules
+  - audit log
+        |  plain HTTP / JSON
+Existing Bizplay REST API  <- UNCHANGED (mocked here)
+```
+
+## Two ways to connect the existing API
+
+| | Option A: zero-code | Option B: curated gateway |
+|---|---|---|
+| File | `src/bizplay_mcp/openapi_gateway.py` | `src/bizplay_mcp/server.py` |
+| How | FastMCP reads the API's OpenAPI/Swagger spec and generates one tool per endpoint | Hand-written, task-level tools that call several endpoints each |
+| Code per endpoint | None | A few lines in `adapters.py` |
+| Permissions, compliance, audit | No | Yes |
+| Best for | Fast prototyping, internal use | The real product |
+
+Recommended path: start with Option A to see what agents can do with your API
+today, then move the useful tools into Option B and add the guardrails.
+
+## Onboarding portal (mockup)
+
+A self-service web portal where an API provider registers its API with the
+gateway and controls who may call what. Mockup scope: **auth, MCP registry,
+access control, security**. No load balancing, scaling, or DevOps.
+
+```bash
+uv run bizplay-portal
+```
+
+Open http://127.0.0.1:18090 and sign in with `admin@bizplay.co.kr` / `admin1234`.
+
+| Page | What it does |
+|---|---|
+| Overview | Request-flow diagram, security checklist score, recent gateway calls |
+| MCP Registry | Register an API from an OpenAPI spec, publish/unpublish, **Test connection** (proves `/api/*` answers 401 without a bearer token) |
+| Access Control | Per tool: enabled, allowed roles, confirm-before-call. Applied by the gateway on the next call |
+| Agent Tokens | Issue a bearer token bound to one Bizplay user and role; shown once; revoke takes effect immediately |
+| Security | Bearer requirements, default token lifetime, identity mapping, upstream credential rotation |
+| Audit Log | Every gateway call with user, how the user was identified (`bearer` or `env`), tool, outcome |
+
+### Auth modes for a registered API
+
+| Mode | API change | Publish rule | What the gateway does |
+|---|---|---|---|
+| Bearer | API rejects anonymous calls | Service token required, connection test must see 401 | Sends the service token |
+| Network-isolated | None, firewall only | Allowlisted gateway address recorded | Sends nothing |
+| Open | None | Allowed, flagged red as accepted risk | Sends nothing, enforces everything itself |
+
+In every mode the gateway still requires agent tokens, applies tool policy, and
+scopes results to the caller's company: any argument named `corpNo` (or similar)
+must equal the token's company, and records belonging to other companies are
+removed from responses.
+
+### Registry gateway
+
+`bizplay_mcp/registry_gateway.py` serves every published provider from the spec
+stored in the portal, with tool names prefixed by the provider id
+(`bizplay_classifier_getAllCorps`). Restart it after publishing a new provider.
+
+```bash
+uv run --no-sync python -m bizplay_mcp.registry_gateway --transport http --port 8002
+```
+
+Claude Desktop entry `bizplay-registry` runs the same server over stdio with the
+identity taken from `BIZPLAY_USER_ID`, `BIZPLAY_ROLE`, and `BIZPLAY_COMPANY`.
+
+### Bearer tokens everywhere
+
+Three separate bearer tokens, none of them visible to the AI model:
+
+```
+AI agent --(agent token)--> MCP gateway --(service token)--> Bizplay API
+                            ^ portal session token protects the portal's own /api/*
+```
+
+- **Bizplay API**: every `/api/*` endpoint returns 401 without `Authorization: Bearer <service token>` (`BIZPLAY_API_TOKENS`, default `demo-service-token`). Only `/health` is public.
+- **MCP gateway (HTTP)**: every request needs a portal-issued agent token. The token's user and role become the caller's identity, and the role must match Bizplay's user record. Over stdio (Claude Desktop) the identity falls back to `BIZPLAY_USER_ID`.
+- **Portal**: every `/api/*` call except login needs the session token from `/api/login`.
+
+Shared state lives in `data/portal_state.json` (written by the portal, read by the gateway).
+Delete it to reset to the seed data.
+
+## Project layout
+
+```
+openapi/bizplay-existing-api.json   OpenAPI spec of the existing API (used by Option A)
+src/legacy_bizplay_api/             MOCK of the existing Bizplay API. Treat as untouchable.
+                                    (app.py enforces bearer auth on every /api/* endpoint)
+src/bizplay_mcp/
+  adapters.py       Only place that knows the existing endpoints (HTTP client, sends the service token)
+  auth.py           Gateway bearer verification against portal-issued agent tokens
+  policy_store.py   Shared control-plane state: registry, tokens, per-tool access policy
+  compliance.py     Korean corporate-card rules (simplified demo values)
+  audit.py          JSON Lines audit log of every tool call -> logs/audit.jsonl
+  server.py         Option B: curated MCP gateway (auth + policy + audit)
+  openapi_gateway.py  Option A: auto-generated MCP gateway
+src/portal/         Onboarding portal mockup (Starlette backend + vanilla JS UI)
+scripts/smoke_http.py  Real-network end-to-end check
+tests/              Automated tests (in-process, no network)
+```
+
+## Setup
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+```
+
+## Run
+
+Start the mock existing API (in production, this is Bizplay's real API):
+
+```bash
+uv run legacy-bizplay-api --port 18080
+```
+
+Then start one of the gateways in another terminal.
+
+```bash
+uv run bizplay-mcp --transport http --port 8000
+```
+
+```bash
+uv run bizplay-mcp-openapi --transport http --port 8001
+```
+
+The MCP endpoints are `http://127.0.0.1:8000/mcp` and `http://127.0.0.1:8001/mcp`.
+Point the gateway at another API with the `BIZPLAY_API_BASE_URL` environment variable.
+
+Run the end-to-end check against the curated gateway:
+
+```bash
+uv run python scripts/smoke_http.py
+```
+
+## Use it from Claude Desktop
+
+Add this entry under `mcpServers` in `%APPDATA%\Claude\claude_desktop_config.json`,
+then fully quit Claude Desktop from the system tray and reopen it:
+
+```json
+"bizplay": {
+  "command": "C:\\Users\\user\\.local\\bin\\uv.exe",
+  "args": [
+    "--directory",
+    "C:\\Users\\user\\OneDrive\\Documents\\02. Master Degree\\03. Lab\\01. Project\\01. WebCash\\04. BizPlay\\07. Experiment\\01. Bizplay MCP Server",
+    "run",
+    "bizplay-mcp"
+  ],
+  "env": {
+    "BIZPLAY_API_BASE_URL": "embedded",
+    "BIZPLAY_USER_ID": "emp001",
+    "FASTMCP_SHOW_SERVER_BANNER": "false"
+  }
+}
+```
+
+- `"embedded"` runs the mock existing API inside the MCP server process, so no
+  second terminal is needed. Demo data resets every time Claude Desktop restarts.
+  To use a separately running API instead, set it to `http://127.0.0.1:18080`
+  and start `uv run legacy-bizplay-api --port 18080` first.
+- Use the full path to `uv.exe`, because Claude Desktop may not see your terminal's PATH.
+- Change `BIZPLAY_USER_ID` to `mgr001` to act as the manager.
+- If the server does not appear, check `%LOCALAPPDATA%\Claude\Logs\mcp-server-bizplay.log`.
+  If that file does not exist, Claude Desktop has not restarted since the config changed.
+
+Try asking: "Help me close my September 2026 card expenses."
+
+## What the curated gateway exposes
+
+| Tool | Who | What it does |
+|---|---|---|
+| `get_card_balance` | anyone | Limit, spent, and remaining per card for a month |
+| `list_card_transactions` | anyone | The caller's own card transactions |
+| `find_missing_receipts` | anyone | Transactions missing receipt images or attendee lists |
+| `validate_tax_compliance` | anyone | Korean rule check plus deductible input VAT estimate |
+| `draft_expense_report` | anyone | Creates a draft report with a compliance check |
+| `submit_for_approval` | owner | Submits to the manager, refused while blockers remain |
+| `list_pending_approvals` | manager | Reports waiting for the caller |
+| `decide_approval` | manager | Approve or reject, comment required to reject |
+
+Resources: `bizplay://me/profile`, `bizplay://budgets/{department}/{month}`,
+`bizplay://policies/korean-compliance`. Prompt: `month_end_closing`.
+
+Demo users: `emp001` and `emp002` are employees, `mgr001` is their manager.
+Seed data is for September 2026.
+
+## Docker
+
+One image, four services. Requires Docker Desktop running.
+
+```bash
+docker compose up --build
+```
+
+| Service | URL | Notes |
+|---|---|---|
+| portal | http://localhost:18090 | Writes the shared state volume |
+| gateway | http://localhost:8000/mcp | Curated tools, calls `legacy-api` by service name |
+| registry-gateway | http://localhost:8002/mcp | Reads published providers at startup; `docker compose restart registry-gateway` after publishing |
+| legacy-api | http://localhost:18080 | Mock of the existing Bizplay API |
+
+Portal state and the audit log live in named volumes (`state`, `logs`) so they
+survive restarts. Set `BIZPLAY_API_TOKENS` in the environment to change the demo
+service token. The registry gateway reaches external APIs such as
+bizplay-api.aiconvergencelab.com directly, so the container needs outbound
+internet access.
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+## Not production-ready yet
+
+- **Tokens are static lookups, not OAuth.** Agent tokens are random strings
+  stored in a JSON file and matched by value. Production needs OAuth 2.1 with
+  signed JWTs from Bizplay's identity provider, verified by key (FastMCP's
+  `JWTVerifier` / `RemoteAuthProvider`), and hashed storage for any API keys.
+- **Portal accounts are demo accounts** with plain-text passwords and in-file sessions.
+- **Over stdio there is no bearer check.** Claude Desktop launches the server as
+  a local process, so the identity comes from `BIZPLAY_USER_ID`.
+- **Compliance rules are simplified demo values.** They are not tax advice and
+  need review by a Korean tax professional.
+- **The existing API is a mock.** Replace `openapi/bizplay-existing-api.json`
+  with the real Swagger export and point `BIZPLAY_API_BASE_URL` at the real API.
+- **Option A has no guardrails.** Do not expose it to customers as is.

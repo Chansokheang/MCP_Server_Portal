@@ -1,0 +1,36 @@
+[project]
+name = "bizplay-mcp-server"
+version = "0.1.0"
+description = "Sample Bizplay MCP gateway (FastMCP) that wraps Bizplay's existing REST API for AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.12",
+    "httpx>=0.27",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+bizplay-mcp = "bizplay_mcp.server:main"
+bizplay-mcp-openapi = "bizplay_mcp.openapi_gateway:main"
+bizplay-mcp-registry = "bizplay_mcp.registry_gateway:main"
+bizplay-portal = "portal.app:main"
+legacy-bizplay-api = "legacy_bizplay_api.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bizplay_mcp", "src/legacy_bizplay_api", "src/portal"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bizplay MCP Portal</title>
+  <!-- Satoshi (Fontshare), Geist Mono, Phosphor icons. CDN for the mockup; self-host for production. -->
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script>
+    try { const t = localStorage.getItem("portal.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
+</head>
+<body>
+
+<!-- Login -->
+<section id="login" class="login hidden">
+  <form id="login-form" class="login-card">
+    <div class="login-mark"><i class="ph-fill ph-plugs-connected"></i></div>
+    <div>
+      <h1 class="login-title">Bizplay MCP Portal</h1>
+      <p class="muted">Register APIs, control access, watch every agent call.</p>
+    </div>
+    <label class="field">Email <input name="email" type="email" value="admin@bizplay.co.kr" autocomplete="username" required></label>
+    <label class="field">Password <input name="password" type="password" value="admin1234" autocomplete="current-password" required></label>
+    <button class="btn solid" type="submit"><i class="ph ph-arrow-right"></i> Sign in</button>
+    <p id="login-error" class="error" role="alert"></p>
+    <p class="muted small">Demo accounts: admin@bizplay.co.kr / admin1234 and security@bizplay.co.kr / sec1234</p>
+  </form>
+</section>
+
+<!-- App -->
+<div id="app" class="frame hidden">
+  <aside class="rail">
+    <div class="rail-avatar" title="Bizplay MCP Portal"><i class="ph-fill ph-plugs-connected"></i></div>
+    <nav class="rail-nav" aria-label="Main">
+      <a data-page="overview" class="active" title="Overview" aria-label="Overview"><i class="ph ph-house"></i></a>
+      <a data-page="registry" title="MCP Registry" aria-label="MCP Registry"><i class="ph ph-plugs-connected"></i></a>
+      <a data-page="access" title="Access Control" aria-label="Access Control"><i class="ph ph-shield-check"></i></a>
+      <a data-page="tokens" title="Agent Tokens" aria-label="Agent Tokens"><i class="ph ph-key"></i></a>
+      <a data-page="security" title="Security" aria-label="Security"><i class="ph ph-lock-key"></i></a>
+      <a data-page="audit" title="Audit Log" aria-label="Audit Log"><i class="ph ph-list-magnifying-glass"></i></a>
+    </nav>
+    <div class="rail-bottom">
+      <button id="theme-toggle" class="rail-btn" title="Toggle theme" aria-label="Toggle theme"><i class="ph ph-moon"></i></button>
+      <button id="logout" class="rail-btn" title="Sign out" aria-label="Sign out"><i class="ph ph-sign-out"></i></button>
+    </div>
+  </aside>
+
+  <main class="panel">
+    <header class="header">
+      <h1 id="page-title">Overview</h1>
+      <div class="header-right">
+        <button class="hbtn" title="Help" aria-label="Help"><i class="ph ph-question"></i></button>
+        <button class="hbtn" title="Notifications" aria-label="Notifications"><i class="ph ph-bell"></i></button>
+        <div class="user-chip"><span id="whoami-avatar" class="avatar">A</span><span id="whoami-name">Admin</span><i class="ph ph-caret-down"></i></div>
+      </div>
+    </header>
+    <div id="tabs" class="tabs hidden"></div>
+    <div id="page" class="page-body"></div>
+  </main>
+</div>
+
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true"><div class="modal-card"><div id="modal-body"></div></div></div>
+<div id="toast" class="toast hidden" role="status"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
