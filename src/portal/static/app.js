@@ -21,14 +21,67 @@ async function api(method, path, body) {
   return data;
 }
 
+// ---- motion ----
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
+/** Restart a CSS animation on an element that is being reused. */
+function replay(el, cls) {
+  if (!el || reduceMotion.matches) return;
+  el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls);
+}
+
+/** Flatten a block into the pieces worth animating: grid items, not their wrappers. */
+function animUnits(block) {
+  const groups = [...block.querySelectorAll(".stats, .cards, .checklist")];
+  if (!groups.length) return [block];
+  const out = [];
+  for (const child of block.children) {
+    if (groups.includes(child)) out.push(...child.children);
+    else if (groups.some((g) => child.contains(g))) out.push(...animUnits(child));
+    else out.push(child);
+  }
+  return out;
+}
+
+/** Stagger a freshly rendered page so numbers land first, then the detail below. */
+function animateIn(root) {
+  if (reduceMotion.matches || !root) return;
+  const units = [...root.children].flatMap(animUnits);
+  units.forEach((el, i) => { el.style.setProperty("--i", Math.min(i, 14)); replay(el, "anim"); });
+  root.querySelectorAll(".stat .num").forEach(countUp);
+}
+
+/** Count a headline metric up from zero. Draws the eye to what changed. */
+function countUp(el) {
+  const m = el.textContent.trim().match(/^(\d+)(\D*)$/);
+  if (!m) return;
+  const to = Number(m[1]), suffix = m[2], start = performance.now(), dur = 650;
+  const step = (now) => {
+    const p = Math.min(1, (now - start) / dur);
+    el.textContent = Math.round(to * (1 - Math.pow(1 - p, 3))) + suffix;
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 // ---- small UI helpers ----
 function toast(title, sub = "", ms = 3000) {
   const el = $("#toast");
   el.innerHTML = `<span class="mark"><i class="ph ph-check"></i></span><div><strong>${esc(title)}</strong>${sub ? `<span>${esc(sub)}</span>` : ""}</div>`;
-  el.classList.remove("hidden");
-  clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.add("hidden"), ms);
+  el.classList.remove("hidden", "leaving");
+  replay(el, "toast");
+  clearTimeout(toast._t); clearTimeout(toast._h);
+  toast._t = setTimeout(() => {
+    if (reduceMotion.matches) return el.classList.add("hidden");
+    el.classList.add("leaving");
+    toast._h = setTimeout(() => el.classList.add("hidden"), 220);
+  }, ms);
 }
-function modal(html) { $("#modal-body").innerHTML = html; $("#modal").classList.remove("hidden"); }
+function modal(html) {
+  $("#modal-body").innerHTML = html;
+  $("#modal").classList.remove("hidden");
+  replay($("#modal .modal-card"), "modal-card");
+}
 function closeModal() { $("#modal").classList.add("hidden"); }
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
 
@@ -82,14 +135,17 @@ function enterApp() {
 
 // ---- router ----
 const pages = {};
-const titles = { overview: "Overview", registry: "MCP Registry", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
+const titles = { overview: "Overview", registry: "MCP Registry", provider: "API details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
+// Pages reached from another page keep that page's rail icon lit.
+const RAIL_OF = { provider: "registry" };
 function hashParam(name) { return new URLSearchParams(location.hash.split("?")[1] || "").get(name); }
 function setHash(page, params) { const q = new URLSearchParams(params || {}).toString(); location.hash = q ? `${page}?${q}` : page; }
 function go(page) {
   page = (page || "").split("?")[0];
   if (!pages[page]) page = "overview";
   if (location.hash.slice(1).split("?")[0] !== page) location.hash = page;
-  document.querySelectorAll(".rail-nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === page));
+  const rail = RAIL_OF[page] || page;
+  document.querySelectorAll(".rail-nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === rail));
   $("#page-title").textContent = titles[page];
   $("#tabs").classList.add("hidden");
   $("#page").innerHTML = SKELETON;
@@ -163,10 +219,8 @@ pages.registry = async () => {
           <h3 class="card-title">${esc(p.base_url.replace(/^https?:\/\//, ""))}</h3>
           <p class="card-desc">MCP endpoint ${esc(p.mcp_url)}${p.tool_prefix ? `, tools named ${esc(p.tool_prefix)}*` : ""}. Spec from ${esc(p.spec_source)}. Owner ${esc(p.owner)}.</p>
           <div class="card-actions">
-            <button class="btn small" data-act="test" data-id="${esc(p.id)}"><i class="ph ph-plugs"></i> Test connection</button>
-            <button class="btn small" data-act="access" data-id="${esc(p.id)}"><i class="ph ph-sliders-horizontal"></i> Tools</button>
-            <button class="btn small ${p.status === "published" ? "" : "solid"}" data-act="${p.status === "published" ? "unpublish" : "publish"}" data-id="${esc(p.id)}"><i class="ph ${p.status === "published" ? "ph-eye-slash" : "ph-check"}"></i> ${p.status === "published" ? "Unpublish" : "Publish"}</button>
-            ${p.id !== "bizplay" ? `<button class="btn small danger" data-act="delete" data-id="${esc(p.id)}"><i class="ph ph-trash"></i></button>` : ""}
+            <button class="btn small" data-act="detail" data-id="${esc(p.id)}"><i class="ph ph-info"></i> View details</button>
+            <button class="btn small solid" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> How to use it</button>
           </div>
         </div>`).join("")}</div>`
       : `<div class="card">${emptyState("plugs-connected", "No APIs here", "Register one with an OpenAPI spec. The API itself is not changed.")}</div>`}
@@ -177,10 +231,10 @@ pages.registry = async () => {
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     const { act, id } = b.dataset;
     try {
-      if (act === "access") { setHash("access", { p: id }); return; }
-      if (act === "test") return testDialog(id);
-      if (act === "delete") { if (!confirm(`Delete provider ${id}?`)) return; await api("DELETE", `/api/registry/${id}`); toast("Provider deleted", id); }
-      else { await api("POST", `/api/registry/${id}/${act}`); toast(act === "publish" ? "Published" : "Unpublished", `${id} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`); }
+      if (act === "detail") { setHash("provider", { p: id }); return; }
+      if (act === "usage") { setHash("provider", { p: id, c: "claude-desktop" }); return; }
+      await api("POST", `/api/registry/${id}/${act}`);
+      toast(act === "publish" ? "Published" : "Unpublished", `${id} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`);
       pages.registry();
     } catch (err) { toast("Action failed", err.message, 4500); }
   });
@@ -347,12 +401,169 @@ async function issueDialog() {
         <pre>URL:    http://127.0.0.1:8000/mcp
 Header: Authorization: Bearer ${esc(r.token)}</pre>
         <p class="muted small" style="margin-top:8px">Bound to ${esc(r.record.sub)} (${esc(r.record.role)}), expires ${esc(fmtTs(r.record.expires_at))}.</p>
-        <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btn solid" id="tok-done">Done</button></div>`);
+        <div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px"><button class="btn" id="tok-connect"><i class="ph ph-robot"></i> Setup instructions</button><button class="btn solid" id="tok-done">Done</button></div>`);
+      $("#tok-connect").onclick = () => { closeModal(); location.hash = "registry"; toast("Pick an API", "Open How to use it on the API you want to connect"); };
       $("#tok-copy").onclick = () => navigator.clipboard?.writeText(r.token).then(() => toast("Copied", "Token is on your clipboard"));
       $("#tok-done").onclick = () => { closeModal(); pages.tokens(); };
     } catch (err) { $("#tok-error").textContent = err.message; }
   };
 }
+
+// ---- Registered API detail: how to use this one API ----
+const PROJECT_DIR = "C:\\Users\\user\\OneDrive\\Documents\\02. Master Degree\\03. Lab\\01. Project\\01. WebCash\\04. BizPlay\\07. Experiment\\01. Bizplay MCP Server";
+
+function codeBlock(id, text, note) {
+  return `<div class="code-block"><button class="btn small copy" data-copy="${id}"><i class="ph ph-copy"></i> Copy</button><pre id="${id}">${esc(text)}</pre>${note ? `<p class="muted small" style="margin:8px 0 0">${note}</p>` : ""}</div>`;
+}
+
+const portOf = (url) => (String(url).match(/:(\d+)/) || [, "8002"])[1];
+
+/** Setup guides written for one registered API: its endpoint, prefix and a real tool of its own. */
+function clientGuides(p, tools) {
+  const enabled = tools.filter((t) => t.enabled);
+  const sample = enabled.find((t) => t.kind === "read") || enabled[0];
+  const toolName = sample ? `${p.tool_prefix || ""}${sample.name}` : "a_tool_name";
+  const sampleArgs = sample && /\{corpNo\}/.test(sample.route || "") ? `{"corpNo": "1078836129"}` : "{}";
+  const port = portOf(p.mcp_url);
+  const localModule = p.has_spec ? "bizplay_mcp.registry_gateway" : "bizplay_mcp.server";
+  const env = p.has_spec
+    ? { BIZPLAY_USER_ID: "emp001", BIZPLAY_ROLE: "employee", BIZPLAY_COMPANY: "1078836129", FASTMCP_SHOW_SERVER_BANNER: "false" }
+    : { BIZPLAY_API_BASE_URL: "embedded", BIZPLAY_USER_ID: "emp001", FASTMCP_SHOW_SERVER_BANNER: "false" };
+  const desktopCfg = `"${p.id}": ` + JSON.stringify({
+    command: "uv",
+    args: ["--directory", PROJECT_DIR, "run", "--no-sync", "python", "-m", localModule],
+    env,
+  }, null, 2);
+
+  return {
+    "claude-desktop": {
+      label: "Claude Desktop", icon: "desktop", ready: true,
+      lead: `Claude Desktop starts the gateway itself as a local program, so this API needs no agent token and no running server. Identity comes from the config.`,
+      steps: [
+        { t: "Open the config file", b: `<p>Windows: <span class="mono">%APPDATA%\\Claude\\claude_desktop_config.json</span><br>macOS: <span class="mono">~/Library/Application Support/Claude/claude_desktop_config.json</span></p>` },
+        { t: "Add this entry under mcpServers", b: codeBlock("g-desktop", desktopCfg, "Use the full path to uv.exe if Claude Desktop cannot find it on PATH. Change the identity values to act as a different user.") },
+        { t: "Quit Claude Desktop from the system tray, then reopen", b: `<p>Closing the window is not enough. The tools appear in the tools menu of a new chat.</p>` },
+        { t: "Try it", b: `<p>Ask for something this API covers, for example a call to <span class="mono">${esc(toolName)}</span>.</p>` },
+      ],
+    },
+    "claude-code": {
+      label: "Claude Code", icon: "terminal-window", ready: true,
+      lead: `Claude Code calls this API over HTTP at ${p.mcp_url} and sends an agent token as a header. Issue a token on the Agent Tokens page first.`,
+      steps: [
+        { t: "Add the server", b: codeBlock("g-code-1", `claude mcp add --transport http ${p.id} ${p.mcp_url} \\\n  --header "Authorization: Bearer <YOUR_AGENT_TOKEN>"`, "The token is shown once, when issued. Its user, role and company decide what this API returns.") },
+        { t: "Check it connected", b: codeBlock("g-code-2", `claude mcp list`) },
+        { t: "Remove it later", b: codeBlock("g-code-3", `claude mcp remove ${p.id}`) },
+      ],
+    },
+    "any-mcp": {
+      label: "Any MCP client", icon: "plugs-connected", ready: true,
+      lead: `Any client that speaks MCP over HTTP can use this API. It needs the endpoint and an Authorization header.`,
+      steps: [
+        { t: "Connection details", b: `<dl class="kv"><dt>Endpoint</dt><dd>${esc(p.mcp_url)}</dd><dt>Transport</dt><dd>streamable HTTP</dd><dt>Header</dt><dd>Authorization: Bearer &lt;token&gt;</dd><dt>Tool names</dt><dd>${esc(p.tool_prefix || "no prefix")}</dd></dl>` },
+        { t: "Python, with the FastMCP client", b: codeBlock("g-py", `from fastmcp import Client\nfrom fastmcp.client.transports import StreamableHttpTransport\n\nclient = Client(StreamableHttpTransport(\n    "${p.mcp_url}", auth="<YOUR_AGENT_TOKEN>"))\n\nasync with client as c:\n    tools = await c.list_tools()\n    result = await c.call_tool("${toolName}", ${sampleArgs})`) },
+        { t: "Raw HTTP, to check the token", b: codeBlock("g-curl", `curl -s ${p.mcp_url} \\\n  -H "Authorization: Bearer <YOUR_AGENT_TOKEN>" \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json" \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",\n       "params":{"protocolVersion":"2025-06-18","capabilities":{},\n                 "clientInfo":{"name":"curl","version":"0"}}}'`, "Without the header this returns 401. That is the gateway refusing an unauthenticated agent.") },
+      ],
+    },
+    "chatgpt": {
+      label: "ChatGPT and Claude.ai", icon: "globe", ready: false,
+      lead: `These are cloud products. They cannot reach ${esc(p.mcp_url.replace(/^https?:\/\//, "").split("/")[0])}, and their connector settings have no field for a static bearer token.`,
+      steps: [
+        { t: "Give this endpoint a public HTTPS address", b: `<p>Use a tunnel for a demo, or deploy the gateway to a server.</p>${codeBlock("g-tunnel", `cloudflared tunnel --url http://127.0.0.1:${port}\n\n# or\nngrok http ${port}`, "The HTTPS address the tool prints becomes the MCP endpoint, with the same path.")}` },
+        { t: "Add OAuth to the gateway", b: `<p>Both clients start an OAuth login when you add a remote MCP server. The gateway verifies tokens issued in this portal, so it needs an OAuth provider and a login page. FastMCP ships the providers, so this is configuration rather than a rewrite.</p>` },
+        { t: "Then add it in the product", b: `<p>ChatGPT: Settings, Connectors, Add. Claude.ai: Settings, Connectors, Add custom connector. Paste the HTTPS endpoint and sign in when prompted.</p>` },
+      ],
+    },
+    "enterprise": {
+      label: "Copilot Studio and Agentforce", icon: "buildings", ready: false,
+      lead: `Both support remote MCP servers and need the same public HTTPS address and OAuth login as the cloud chat products.`,
+      steps: [
+        { t: "Microsoft Copilot Studio", b: `<p>Add the gateway as a custom connector, point it at ${esc(p.mcp_url)} on its public address, then enable it as a tool for the agent.</p>` },
+        { t: "Salesforce Agentforce", b: `<p>Register the endpoint in the Agentforce MCP registry, then grant the agent access to the tools you enabled for this API.</p>` },
+        { t: "What to prepare", b: `<p>A hosted gateway with a certificate, OAuth mapped to the customer's identity provider, and an agent token policy per company. The Security page tracks what is still open.</p>` },
+      ],
+    },
+  };
+}
+
+pages.provider = async () => {
+  const pid = hashParam("p");
+  const reg = await api("GET", "/api/registry");
+  const p = reg.items.find((x) => x.id === pid);
+  if (!p) {
+    $("#page").innerHTML = `<div class="card">${emptyState("plugs", "API not found", "It may have been deleted. Open the registry to see what is registered.")}
+      <div style="text-align:center"><button class="btn" onclick="location.hash='registry'">Back to registry</button></div></div>`;
+    return;
+  }
+  const d = await api("GET", `/api/registry/${pid}/tools`);
+  const tools = d.items, enabled = tools.filter((t) => t.enabled);
+  const guides = clientGuides(p, tools);
+  const key = guides[hashParam("c")] ? hashParam("c") : "claude-desktop";
+  const g = guides[key];
+  $("#page-title").textContent = p.name;
+  renderTabs(Object.entries(guides).map(([k, v]) => ({ key: k, label: v.label, icon: v.icon })), key,
+    (k) => { setHash("provider", { p: pid, c: k }); pages.provider(); },
+    p.status === "published" ? { title: "Live", sub: `${enabled.length} tools reachable by agents` } : null);
+
+  const shown = enabled.slice(0, 10);
+  $("#page").innerHTML = `
+    <div><button class="btn small" id="back-registry"><i class="ph ph-arrow-left"></i> All APIs</button></div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-brand" style="font-size:16px">${logo(p.name, 0)} ${esc(p.name)}</span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${authChip(p.auth_mode)}${statusChip(p.status)}</span>
+      </div>
+      <div class="tiles" style="grid-template-columns:repeat(4, 1fr)">
+        ${tile("link", "MCP endpoint", p.mcp_url, true)}
+        ${tile("cloud", "Upstream API", p.base_url.replace(/^https?:\/\//, ""), true)}
+        ${tile("plug", "Tools", `${p.tools_enabled} of ${p.tool_count} enabled`)}
+        ${tile("textbox", "Tool names", p.tool_prefix ? `${p.tool_prefix}*` : "no prefix")}
+      </div>
+      <p class="card-desc" style="-webkit-line-clamp:3">Spec from ${esc(p.spec_source)}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream API accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : "The gateway sends a stored service token on every call."}</p>
+      <div class="card-actions">
+        <button class="btn small" data-act="test"><i class="ph ph-plugs"></i> Test connection</button>
+        <button class="btn small" data-act="access"><i class="ph ph-sliders-horizontal"></i> Manage tools</button>
+        <button class="btn small ${p.status === "published" ? "" : "solid"}" data-act="${p.status === "published" ? "unpublish" : "publish"}"><i class="ph ${p.status === "published" ? "ph-eye-slash" : "ph-check"}"></i> ${p.status === "published" ? "Unpublish" : "Publish"}</button>
+        ${p.id !== "bizplay" ? `<button class="btn small danger" data-act="delete"><i class="ph ph-trash"></i> Delete</button>` : ""}
+      </div>
+    </div>
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">
+        <h2 class="section-title" style="margin:0">Use ${esc(p.name)} from ${esc(g.label)}</h2>
+        ${g.ready ? chip("green", "Works today", "check") : chip("amber", "Needs hosting and OAuth", "warning")}
+      </div>
+      <p class="muted" style="max-width:76ch">${esc(g.lead)}</p>
+      <div class="steps">${g.steps.map((s, i) => `<div class="step"><span class="step-n">${i + 1}</span><div class="step-b"><strong>${esc(s.t)}</strong>${s.b}</div></div>`).join("")}</div>
+    </div>
+    <div>
+      <h2 class="section-title">Tools this API exposes to agents</h2>
+      <div class="table-card"><div class="table-wrap"><table><tr><th>Tool name the agent calls</th><th>Kind</th><th>Upstream endpoint</th></tr>
+      ${shown.length ? shown.map((t) => `<tr><td class="mono">${esc((p.tool_prefix || "") + t.name)}${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}</td><td>${t.kind === "write" ? chip("amber", "write", "pencil-simple") : chip("lilac", "read", "eye")}${t.confirm ? ` ${chip("", "confirm first")}` : ""}</td><td class="mono small">${esc(t.route || "composed from several endpoints")}</td></tr>`).join("")
+        : `<tr><td colspan="3">${emptyState("sliders-horizontal", "No tools enabled", "Enable some on the Access Control page and they appear here.")}</td></tr>`}
+      </table></div></div>
+      ${enabled.length > shown.length ? `<p class="muted small" style="margin-top:8px">${enabled.length - shown.length} more enabled. Open Manage tools to see the full list.</p>` : ""}
+    </div>
+    <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Tokens are shown once, so issue a new one and revoke the old if you lost it.</span></div>`;
+
+  $("#back-registry").onclick = () => { location.hash = "registry"; };
+  $("#page").querySelectorAll(".copy").forEach((b) => b.onclick = () => {
+    const text = $("#" + b.dataset.copy)?.textContent || "";
+    navigator.clipboard?.writeText(text).then(() => toast("Copied", "Paste it into your client"));
+  });
+  $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
+    const act = b.dataset.act;
+    try {
+      if (act === "access") { setHash("access", { p: pid }); return; }
+      if (act === "test") return testDialog(pid);
+      if (act === "delete") {
+        if (!confirm(`Delete ${p.name}?`)) return;
+        await api("DELETE", `/api/registry/${pid}`); toast("Provider deleted", p.name); location.hash = "registry"; return;
+      }
+      await api("POST", `/api/registry/${pid}/${act}`);
+      toast(act === "publish" ? "Published" : "Unpublished", `${p.name} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`);
+      pages.provider();
+    } catch (err) { toast("Action failed", err.message, 4500); }
+  });
+};
 
 // ---- Security ----
 pages.security = async () => {
@@ -427,6 +638,10 @@ pages.audit = async () => {
 };
 
 // ---- boot ----
+// Every page renders by replacing #page, so one observer animates them all.
+new MutationObserver(() => animateIn($("#page"))).observe($("#page"), { childList: true });
+new MutationObserver(() => replay($("#tabs"), "anim")).observe($("#tabs"), { childList: true });
+
 if (session?.token) {
   api("GET", "/api/me").then((u) => { session.user = u; enterApp(); }).catch(() => signOut());
 } else {

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import secrets
 import time
@@ -198,7 +199,9 @@ async def register_provider(request: Request):
     state["providers"][pid] = {
         "id": pid, "name": name, "owner": request.state.user, "base_url": base_url,
         "spec_source": body.get("spec_source") or "uploaded", "spec": spec,
-        "mcp_url": "http://127.0.0.1:8002/mcp", "tool_prefix": pid.replace("-", "_") + "_",
+        # The address agents will use. Set BIZPLAY_PUBLIC_REGISTRY_URL when the
+        # gateway is published on a different host or port than it listens on.
+        "mcp_url": policy_store.public_url("registry"), "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},
         "tools": _tools_from_spec(spec), "created_at": _now_iso(),

@@ -127,6 +127,19 @@ async def test_connection_test_without_service_token_reports_clearly(admin, monk
     assert r.json()["ok"] is False
 
 
+async def test_public_url_follows_the_published_port(admin, monkeypatch):
+    """Agents get the published address, not the container's internal port."""
+    monkeypatch.setenv("BIZPLAY_PUBLIC_REGISTRY_URL", "http://mcp.example.com:9011/mcp")
+    monkeypatch.setenv("BIZPLAY_PUBLIC_GATEWAY_URL", "http://mcp.example.com:9010/mcp")
+    r = await admin.post("/api/registry", json={"name": "Ported API", "base_url": "http://x.test",
+                                                "spec": SPEC, "auth_mode": "open"})
+    assert r.json()["mcp_url"] == "http://mcp.example.com:9011/mcp"
+    assert policy_store.public_url("curated") == "http://mcp.example.com:9010/mcp"
+
+    monkeypatch.delenv("BIZPLAY_PUBLIC_REGISTRY_URL")
+    assert policy_store.public_url("registry") == "http://127.0.0.1:8002/mcp"
+
+
 async def test_overview_and_audit(admin):
     ov = (await admin.get("/api/overview")).json()
     assert ov["providers"] >= 1 and 0 <= ov["score"] <= 100

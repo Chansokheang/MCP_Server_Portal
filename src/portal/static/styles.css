@@ -90,8 +90,8 @@ i.ph, i.ph-fill { font-size: 16px; line-height: 1; vertical-align: -3px; }
 .login-mark i { font-size: 20px; }
 .login-title { font-size: 22px; margin-bottom: 4px; }
 
-/* ---------- frame + rail ---------- */
-.frame { max-width: 1400px; margin: 28px auto; padding: 8px; background: var(--frame); border-radius: 30px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: calc(100dvh - 56px); box-shadow: 0 30px 80px rgb(31 35 33 / .25); }
+/* ---------- app shell (full bleed) + rail ---------- */
+.frame { background: var(--frame); display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100dvh; }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 16px 0; }
 .rail-avatar { width: 38px; height: 38px; border-radius: 50%; background: #fff; color: var(--frame); display: grid; place-items: center; }
 .rail-avatar i { font-size: 18px; }
@@ -103,8 +103,8 @@ i.ph, i.ph-fill { font-size: 16px; line-height: 1; vertical-align: -3px; }
 .rail-bottom { margin-top: auto; display: grid; gap: 8px; }
 
 /* ---------- panel ---------- */
-.panel { background: var(--panel); border-radius: 24px; display: flex; flex-direction: column; min-height: 100%; overflow: hidden; }
-.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px; }
+.panel { background: var(--panel); display: flex; flex-direction: column; min-height: 100dvh; overflow: hidden; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 28px; }
 .header-right { display: flex; align-items: center; gap: 6px; }
 .hbtn { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
 .hbtn:hover { background: var(--tile); }
@@ -112,7 +112,7 @@ i.ph, i.ph-fill { font-size: 16px; line-height: 1; vertical-align: -3px; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--frame); color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
 
 /* ---------- tabs ---------- */
-.tabs { display: flex; gap: 6px; align-items: center; padding: 8px 16px; background: var(--band); margin: 0 8px; border-radius: var(--r-pill); overflow-x: auto; }
+.tabs { display: flex; gap: 6px; align-items: center; padding: 8px 16px; background: var(--band); margin: 0 28px; border-radius: var(--r-pill); overflow-x: auto; }
 .tab { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: var(--r-pill); border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap; }
 .tab .tab-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); color: var(--ink-2); }
 .tab .count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--surface); color: var(--ink-3); font-size: 11px; display: grid; place-items: center; font-family: var(--font-mono); }
@@ -128,7 +128,7 @@ i.ph, i.ph-fill { font-size: 16px; line-height: 1; vertical-align: -3px; }
 .tab-note span { color: var(--ink-3); font-size: 11px; }
 
 /* ---------- page body ---------- */
-.page-body { padding: 20px 24px 28px; display: grid; gap: 22px; align-content: start; }
+.page-body { padding: 22px 28px 36px; display: grid; gap: 22px; align-content: start; }
 .section-title { font-size: 17px; font-weight: 500; margin: 0 0 12px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); grid-auto-flow: dense; gap: 14px; }
 
@@ -248,14 +248,57 @@ pre { background: var(--tile); color: var(--ink); padding: 12px 14px; border-rad
 .token-box { display: flex; gap: 8px; align-items: center; }
 .token-box code { flex: 1; word-break: break-all; background: var(--tile); padding: 10px 12px; border-radius: var(--r-tile); font-family: var(--font-mono); font-size: 12px; }
 
+/* ---------- setup steps (Connect page) ---------- */
+.steps { display: grid; gap: 12px; margin-top: 16px; }
+.step { display: grid; grid-template-columns: 26px 1fr; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 16px 18px; }
+.step-n { width: 26px; height: 26px; border-radius: 50%; background: var(--frame); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 500; }
+:root[data-theme="dark"] .step-n { background: #eef1ec; color: #1f2321; }
+.step-b strong { display: block; font-weight: 500; margin-bottom: 8px; }
+.step-b p { color: var(--ink-2); font-size: 12.5px; }
+.step-b .kv { margin-top: 4px; }
+.code-block { position: relative; margin-top: 4px; }
+.code-block .copy { position: absolute; top: 8px; right: 8px; }
+.code-block pre { padding-right: 92px; white-space: pre-wrap; word-break: break-word; }
+
+/* ---------- motion ----------
+   Entrances are staggered so the eye lands on the headline numbers first, then
+   the content below. Every rule here is disabled by the reduced-motion block. */
+@keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: scale(.97) translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes toast-in { from { opacity: 0; transform: translateX(26px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(26px) scale(.96); } }
+@keyframes veil-in { from { opacity: 0; } to { opacity: 1; } }
+
+.anim { animation: fade-up .5s cubic-bezier(.16, 1, .3, 1) both; animation-delay: calc(var(--i, 0) * 45ms); }
+.modal { animation: veil-in .18s ease both; }
+.modal-card { animation: pop-in .34s cubic-bezier(.16, 1, .3, 1) both; }
+.toast { animation: toast-in .34s cubic-bezier(.16, 1, .3, 1) both; }
+.toast.leaving { animation: toast-out .2s ease both; }
+.login-card { animation: pop-in .45s cubic-bezier(.16, 1, .3, 1) both; }
+
+/* Controls: shorter, feedback-only transitions. */
+.tab { transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .08s ease; }
+.tab:active { transform: scale(.97); }
+.tab .tab-ic, .tab .count { transition: background .2s ease, color .2s ease; }
+.card-actions .btn { transition: background .15s ease, transform .1s cubic-bezier(.16, 1, .3, 1), border-color .15s ease; }
+.hbtn, .user-chip { transition: background .15s ease, border-color .15s ease; }
+.check-item { transition: transform .2s cubic-bezier(.16, 1, .3, 1), box-shadow .2s ease; }
+.check-item:hover { transform: translateX(2px); }
+.stat { transition: transform .25s cubic-bezier(.16, 1, .3, 1), box-shadow .25s ease; }
+.stat:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+tbody tr td { transition: background .15s ease; }
+
 /* ---------- responsive & motion ---------- */
 @media (max-width: 1100px) { .stats { grid-template-columns: 1fr 1fr; } .two { grid-template-columns: 1fr; } .flow { grid-template-columns: 1fr; } .form-2 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .frame { margin: 8px; padding: 6px; border-radius: 22px; grid-template-columns: 1fr; }
+  .frame { grid-template-columns: 1fr; }
   .rail { flex-direction: row; padding: 6px 10px; gap: 8px; }
   .rail-nav { display: flex; margin: 0; }
   .rail-bottom { margin-left: auto; display: flex; }
   .stats { grid-template-columns: 1fr; }
-  .header { padding: 12px 14px; } .page-body { padding: 14px; }
+  .header { padding: 12px 14px; } .page-body { padding: 14px; } .tabs { margin: 0 14px; }
 }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .anim, .modal, .modal-card, .toast, .login-card { opacity: 1 !important; transform: none !important; }
+}

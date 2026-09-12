@@ -1,13 +1,22 @@
-# Bizplay MCP stack (demo deployment).
+# Bizplay MCP stack.
+#
 #   docker compose up --build
 #
-#   portal            http://localhost:18090
-#   curated gateway   http://localhost:8000/mcp
-#   registry gateway  http://localhost:8002/mcp
-#   mock Bizplay API  http://localhost:18080  (internal name: legacy-api)
+# Published ports default to the 9010 to 9020 range. Override any of them, and
+# the public host name, in a .env file next to this one (see .env.example).
 #
-# The portal writes data/portal_state.json; both gateways read it. All three
-# share the `state` volume, and audit entries land in the `logs` volume.
+#   portal            http://HOST:9012
+#   curated gateway   http://HOST:9010/mcp
+#   registry gateway  http://HOST:9011/mcp
+#   mock Bizplay API  http://HOST:9013   (internal name: legacy-api)
+#
+# Containers always listen on their fixed internal ports; only the published
+# port changes. PUBLIC_* URLs tell the portal which address to hand to agents,
+# so the setup instructions on each API detail page stay correct.
+
+x-public-env: &public-env
+  BIZPLAY_PUBLIC_GATEWAY_URL: http://${PUBLIC_HOST:-127.0.0.1}:${GATEWAY_PORT:-9010}/mcp
+  BIZPLAY_PUBLIC_REGISTRY_URL: http://${PUBLIC_HOST:-127.0.0.1}:${REGISTRY_PORT:-9011}/mcp
 
 x-app: &app
   build: .
@@ -22,10 +31,12 @@ services:
     <<: *app
     command: ["legacy-bizplay-api", "--host", "0.0.0.0", "--port", "18080"]
     environment:
+      <<: *public-env
       # Service tokens the mock API accepts (comma-separated).
       BIZPLAY_API_TOKENS: ${BIZPLAY_API_TOKENS:-demo-service-token}
     ports:
-      - "18080:18080"
+      # Remove this mapping in production: only the gateways need to reach it.
+      - "${LEGACY_API_PORT:-9013}:18080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18080/health').status==200 else 1)"]
       interval: 10s
@@ -36,10 +47,11 @@ services:
     <<: *app
     command: ["bizplay-portal", "--host", "0.0.0.0", "--port", "18090"]
     environment:
+      <<: *public-env
       # Seed the Bizplay provider with the in-network API address.
       BIZPLAY_SEED_API_URL: http://legacy-api:18080
     ports:
-      - "18090:18090"
+      - "${PORTAL_PORT:-9012}:18090"
     depends_on:
       legacy-api:
         condition: service_healthy
@@ -48,10 +60,11 @@ services:
     <<: *app
     command: ["bizplay-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      <<: *public-env
       BIZPLAY_API_BASE_URL: http://legacy-api:18080
       BIZPLAY_API_TOKEN: ${BIZPLAY_API_TOKENS:-demo-service-token}
     ports:
-      - "8000:8000"
+      - "${GATEWAY_PORT:-9010}:8000"
     depends_on:
       legacy-api:
         condition: service_healthy
@@ -63,8 +76,10 @@ services:
     # Builds its tools from the providers published in the portal at startup.
     # Restart this service after publishing a new provider.
     command: ["bizplay-mcp-registry", "--transport", "http", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      <<: *public-env
     ports:
-      - "8002:8002"
+      - "${REGISTRY_PORT:-9011}:8002"
     depends_on:
       portal:
         condition: service_started

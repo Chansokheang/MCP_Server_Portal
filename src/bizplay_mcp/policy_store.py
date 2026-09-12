@@ -47,7 +47,7 @@ def _seed_state() -> dict:
                 # In Docker Compose this is http://legacy-api:18080 (BIZPLAY_SEED_API_URL).
                 "base_url": os.environ.get("BIZPLAY_SEED_API_URL", "http://127.0.0.1:18080"),
                 "spec_source": "openapi/bizplay-existing-api.json",
-                "mcp_url": "http://127.0.0.1:8000/mcp",
+                "mcp_url": public_url("curated"),
                 "status": "published",
                 "auth_mode": "bearer",
                 "upstream_credential_id": "cred_bizplay_service",
@@ -91,6 +91,21 @@ AUTH_MODES = {
 # forces them to match the caller's token when the upstream API cannot
 # scope data itself.
 COMPANY_KEYS = ("corpNo", "corp_no", "company", "companyId", "corporationId")
+
+
+def public_url(which: str) -> str:
+    """The address agents should use to reach a gateway.
+
+    Containers listen on fixed internal ports, but the published host and port
+    can differ. Set BIZPLAY_PUBLIC_GATEWAY_URL (curated tools) and
+    BIZPLAY_PUBLIC_REGISTRY_URL (registered APIs) in production so the portal
+    hands out reachable URLs.
+    """
+    env, default = {
+        "curated": ("BIZPLAY_PUBLIC_GATEWAY_URL", "http://127.0.0.1:8000/mcp"),
+        "registry": ("BIZPLAY_PUBLIC_REGISTRY_URL", "http://127.0.0.1:8002/mcp"),
+    }[which]
+    return os.environ.get(env, default)
 
 
 def state_path() -> Path:

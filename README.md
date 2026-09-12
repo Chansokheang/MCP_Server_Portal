@@ -149,6 +149,33 @@ Run the end-to-end check against the curated gateway:
 uv run python scripts/smoke_http.py
 ```
 
+## Connect an AI client
+
+Open the registry, click **How to use it** on an API, and the detail page shows
+copy-paste setup written for that API: its own endpoint, tool prefix, server
+name, and a sample call using one of its real tools. Summary of what each
+client needs:
+
+| Client | How it connects | Works today |
+|---|---|---|
+| Claude Desktop | Launches the gateway locally over stdio, identity from env vars | Yes |
+| Claude Code | HTTP with an `Authorization: Bearer` header | Yes |
+| Any MCP client, scripts, curl | Same HTTP endpoint and header | Yes |
+| ChatGPT, Claude.ai | Remote connector, needs public HTTPS and OAuth | Not yet |
+| Copilot Studio, Agentforce | Remote MCP server, needs public HTTPS and OAuth | Not yet |
+
+Claude Code, after issuing a token on the Agent Tokens page:
+
+```bash
+claude mcp add --transport http bizplay-registry http://127.0.0.1:8002/mcp --header "Authorization: Bearer <YOUR_AGENT_TOKEN>"
+```
+
+The cloud products cannot reach `127.0.0.1` and have no field for a static
+bearer token, so they need the gateway exposed over HTTPS (a tunnel such as
+cloudflared or ngrok for a demo) and an OAuth provider configured on the
+gateway. FastMCP ships the providers, so that is configuration rather than a
+rewrite.
+
 ## Use it from Claude Desktop
 
 Add this entry under `mcpServers` in `%APPDATA%\Claude\claude_desktop_config.json`,
@@ -209,12 +236,37 @@ One image, four services. Requires Docker Desktop running.
 docker compose up --build
 ```
 
-| Service | URL | Notes |
-|---|---|---|
-| portal | http://localhost:18090 | Writes the shared state volume |
-| gateway | http://localhost:8000/mcp | Curated tools, calls `legacy-api` by service name |
-| registry-gateway | http://localhost:8002/mcp | Reads published providers at startup; `docker compose restart registry-gateway` after publishing |
-| legacy-api | http://localhost:18080 | Mock of the existing Bizplay API |
+| Service | Default published port | Container port | Notes |
+|---|---|---|---|
+| gateway | 9010 | 8000 | Curated tools, calls `legacy-api` by service name |
+| registry-gateway | 9011 | 8002 | Reads published providers at startup; `docker compose restart registry-gateway` after publishing |
+| portal | 9012 | 18090 | Writes the shared state volume |
+| legacy-api | 9013 | 18080 | Mock of the existing Bizplay API; drop the mapping in production |
+
+### Changing ports
+
+Copy `.env.example` to `.env` and edit it. Compose reads it automatically, so
+`docker-compose.yml` needs no changes.
+
+```bash
+PUBLIC_HOST=mcp.example.com
+GATEWAY_PORT=9010
+REGISTRY_PORT=9011
+PORTAL_PORT=9012
+LEGACY_API_PORT=9013
+```
+
+Containers always listen on their fixed internal ports. Only the published port
+changes, so any range works as long as the values differ.
+
+`PUBLIC_HOST` and the two gateway ports also set `BIZPLAY_PUBLIC_GATEWAY_URL`
+and `BIZPLAY_PUBLIC_REGISTRY_URL`, which decide the endpoint the portal shows on
+each API detail page and stores with newly registered APIs. Without them agents
+would be handed a URL that only works inside the container.
+
+Existing entries keep the URL they were registered with. After changing the
+host or ports, either register the API again or reset the demo state with
+`docker compose down -v`.
 
 Portal state and the audit log live in named volumes (`state`, `logs`) so they
 survive restarts. Set `BIZPLAY_API_TOKENS` in the environment to change the demo
