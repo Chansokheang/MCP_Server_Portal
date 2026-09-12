@@ -21,6 +21,8 @@ x-public-env: &public-env
 x-app: &app
   build: .
   image: bizplay-mcp:latest
+  # The image is built here, never pulled from a registry.
+  pull_policy: build
   restart: unless-stopped
   volumes:
     - state:/app/data

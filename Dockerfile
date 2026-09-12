@@ -11,7 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
     FASTMCP_SHOW_SERVER_BANNER=false
 
-COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
+# uv comes from PyPI rather than ghcr.io, so the build needs only Docker Hub.
+RUN pip install --no-cache-dir "uv>=0.11,<0.12"
 
 WORKDIR /app
 

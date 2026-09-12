@@ -91,6 +91,18 @@ async def health(request: Request):
     return JSONResponse({"status": "ok"})
 
 
+async def config(request: Request):
+    """Values the setup instructions need that only the server knows."""
+    return JSONResponse({
+        # Where this deployment keeps the project. On a laptop it is the checkout
+        # path; in Docker it is /app, which is why the UI asks the reader to
+        # replace it with the path on the machine running their AI client.
+        "project_dir": os.environ.get("BIZPLAY_PROJECT_DIR", str(PROJECT_ROOT)),
+        "gateway_url": policy_store.public_url("curated", request.url.hostname),
+        "registry_url": policy_store.public_url("registry", request.url.hostname),
+    })
+
+
 # --- overview ----------------------------------------------------------------
 def _security_checklist(state: dict) -> list[dict]:
     sec = state["security"]
@@ -153,6 +165,22 @@ async def list_registry(request: Request):
     return JSONResponse({"items": [_public_provider(p) for p in state["providers"].values()]})
 
 
+def _normalize_base_url(base_url: str, spec: dict) -> tuple[str, str]:
+    """Drop a path from the base URL when the spec's own paths already carry it.
+
+    Registering https://api.example.com/api/v1 together with a spec whose paths
+    start with /api/v1 makes every call hit /api/v1/api/v1/... and return 404.
+    Returns (base_url, note).
+    """
+    scheme_host, _, path = base_url.partition("://")[2].partition("/")
+    prefix = "/" + path.strip("/")
+    paths = list(spec.get("paths", {}))
+    if len(prefix) > 1 and paths and all(p.startswith(prefix + "/") for p in paths):
+        fixed = base_url.split("://")[0] + "://" + scheme_host
+        return fixed, f"Removed '{prefix}' from the base URL: the spec's paths already start with it."
+    return base_url, ""
+
+
 def _tools_from_spec(spec: dict) -> dict:
     tools = {}
     for path, ops in spec.get("paths", {}).items():
@@ -181,6 +209,7 @@ async def register_provider(request: Request):
             raise ApiError(400, "spec must be valid OpenAPI JSON") from None
     if not isinstance(spec, dict) or "paths" not in spec:
         raise ApiError(400, "spec must be an OpenAPI document with 'paths'")
+    base_url, base_note = _normalize_base_url(base_url, spec)
     auth_mode = body.get("auth_mode") or "bearer"
     if auth_mode not in policy_store.AUTH_MODES:
         raise ApiError(400, f"auth_mode must be one of {', '.join(policy_store.AUTH_MODES)}")
@@ -201,13 +230,44 @@ async def register_provider(request: Request):
         "spec_source": body.get("spec_source") or "uploaded", "spec": spec,
         # The address agents will use. Set BIZPLAY_PUBLIC_REGISTRY_URL when the
         # gateway is published on a different host or port than it listens on.
-        "mcp_url": policy_store.public_url("registry"), "tool_prefix": pid.replace("-", "_") + "_",
+        "mcp_url": policy_store.public_url("registry", request.url.hostname),
+        "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},
         "tools": _tools_from_spec(spec), "created_at": _now_iso(),
     }
     policy_store.save(state)
-    return JSONResponse(_public_provider(state["providers"][pid]), status_code=201)
+    return JSONResponse({**_public_provider(state["providers"][pid]), "note": base_note}, status_code=201)
+
+
+async def update_provider(request: Request):
+    """Change how the gateway reaches an API after it was registered."""
+    body = await request.json()
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    note = ""
+    if "name" in body and body["name"].strip():
+        p["name"] = body["name"].strip()
+    if "base_url" in body:
+        base_url = body["base_url"].strip().rstrip("/")
+        if not base_url.startswith("http"):
+            raise ApiError(400, "base_url must start with http")
+        p["base_url"], note = _normalize_base_url(base_url, p.get("spec") or {})
+    if "mcp_url" in body and body["mcp_url"].strip():
+        p["mcp_url"] = body["mcp_url"].strip()
+    if "auth_mode" in body:
+        if body["auth_mode"] not in policy_store.AUTH_MODES:
+            raise ApiError(400, f"auth_mode must be one of {', '.join(policy_store.AUTH_MODES)}")
+        p["auth_mode"] = body["auth_mode"]
+    if "allowlist" in body:
+        p["allowlist"] = body["allowlist"].strip()
+    if p["auth_mode"] == "network" and not p.get("allowlist"):
+        raise ApiError(400, "network mode needs the gateway address the API allows")
+    if body.get("service_token"):
+        state["credentials"][p["upstream_credential_id"]]["secret"] = body["service_token"].strip()
+        state["credentials"][p["upstream_credential_id"]]["rotated_at"] = _now_iso()
+    policy_store.save(state)
+    return JSONResponse({**_public_provider(p), "note": note})
 
 
 def _now_iso() -> str:
@@ -432,12 +492,14 @@ app = Starlette(
     routes=[
         Route("/", index),
         Route("/api/health", health),
+        Route("/api/config", config),
         Route("/api/login", login, methods=["POST"]),
         Route("/api/logout", logout, methods=["POST"]),
         Route("/api/me", me),
         Route("/api/overview", overview),
         Route("/api/registry", list_registry),
         Route("/api/registry", register_provider, methods=["POST"]),
+        Route("/api/registry/{pid}", update_provider, methods=["PATCH"]),
         Route("/api/registry/{pid}", delete_provider, methods=["DELETE"]),
         Route("/api/registry/{pid}/test", test_provider, methods=["POST"]),
         Route("/api/registry/{pid}/tools", list_tools),

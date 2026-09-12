@@ -93,19 +93,24 @@ AUTH_MODES = {
 COMPANY_KEYS = ("corpNo", "corp_no", "company", "companyId", "corporationId")
 
 
-def public_url(which: str) -> str:
+def public_url(which: str, host: str | None = None) -> str:
     """The address agents should use to reach a gateway.
 
     Containers listen on fixed internal ports, but the published host and port
-    can differ. Set BIZPLAY_PUBLIC_GATEWAY_URL (curated tools) and
-    BIZPLAY_PUBLIC_REGISTRY_URL (registered APIs) in production so the portal
-    hands out reachable URLs.
+    can differ. BIZPLAY_PUBLIC_GATEWAY_URL (curated tools) and
+    BIZPLAY_PUBLIC_REGISTRY_URL (registered APIs) win when set. Otherwise the
+    host the portal was opened on is used, which is right far more often than
+    127.0.0.1 when the portal runs on a server.
     """
-    env, default = {
-        "curated": ("BIZPLAY_PUBLIC_GATEWAY_URL", "http://127.0.0.1:8000/mcp"),
-        "registry": ("BIZPLAY_PUBLIC_REGISTRY_URL", "http://127.0.0.1:8002/mcp"),
+    url_env, port_env, default_port = {
+        "curated": ("BIZPLAY_PUBLIC_GATEWAY_URL", "BIZPLAY_GATEWAY_PORT", "8000"),
+        "registry": ("BIZPLAY_PUBLIC_REGISTRY_URL", "BIZPLAY_REGISTRY_PORT", "8002"),
     }[which]
-    return os.environ.get(env, default)
+    explicit = os.environ.get(url_env)
+    if explicit:
+        return explicit
+    port = os.environ.get(port_env, default_port)
+    return f"http://{host or '127.0.0.1'}:{port}/mcp"
 
 
 def state_path() -> Path:

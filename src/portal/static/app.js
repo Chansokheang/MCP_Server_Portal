@@ -128,6 +128,7 @@ applyThemeIcon();
 
 function enterApp() {
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
+  api("GET", "/api/config").then((c) => { SERVER = c; }).catch(() => {});
   $("#whoami-avatar").textContent = initials(session.user.name);
   $("#whoami-name").textContent = session.user.name;
   go(location.hash.replace("#", "") || "overview");
@@ -281,6 +282,41 @@ async function registerDialog() {
   };
 }
 
+async function editDialog(p) {
+  const opt = (v, label) => `<option value="${v}" ${p.auth_mode === v ? "selected" : ""}>${label}</option>`;
+  modal(`<h2><i class="ph ph-pencil-simple"></i> Edit connection</h2>
+    <form id="ed-form" class="form">
+      <label class="field">Provider name <input name="name" value="${esc(p.name)}"></label>
+      <label class="field">Base URL of the existing API <input name="base_url" value="${esc(p.base_url)}">
+        <span class="muted small">Host only. The paths come from the spec, so a base URL ending in a path the spec also has causes 404.</span></label>
+      <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(p.mcp_url)}">
+        <span class="muted small">Use the address reachable from outside this server, not 127.0.0.1.</span></label>
+      <label class="field">How is the API protected?
+        <select name="auth_mode" id="ed-mode">
+          ${opt("bearer", "Bearer token: the API rejects anonymous calls")}
+          ${opt("network", "Network-isolated: no token, only the gateway's address can reach it")}
+          ${opt("open", "Open: anyone can call it (demo data only, recorded as accepted risk)")}
+        </select></label>
+      <label class="field ${p.auth_mode === "bearer" ? "" : "hidden"}" id="ed-token-field">Service bearer token <input name="service_token" placeholder="leave blank to keep the stored one"></label>
+      <label class="field ${p.auth_mode === "network" ? "" : "hidden"}" id="ed-allowlist-field">Gateway address the API allows <input name="allowlist" value="${esc(p.allowlist || "")}" placeholder="e.g. 203.0.113.10"></label>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="ed-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Save</button></div>
+      <p class="error" id="ed-error"></p>
+    </form>`);
+  $("#ed-cancel").onclick = closeModal;
+  $("#ed-mode").onchange = (e) => {
+    $("#ed-token-field").classList.toggle("hidden", e.target.value !== "bearer");
+    $("#ed-allowlist-field").classList.toggle("hidden", e.target.value !== "network");
+  };
+  $("#ed-form").onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    try {
+      const r = await api("PATCH", `/api/registry/${p.id}`, f);
+      closeModal(); toast("Connection updated", r.note || `${r.name} now points at ${r.base_url}`, r.note ? 6000 : 3000);
+      pages.provider();
+    } catch (err) { $("#ed-error").textContent = err.message; }
+  };
+}
+
 async function testDialog(id) {
   modal(`<h2><i class="ph ph-plugs"></i> Connection test: ${esc(id)}</h2>${SKELETON}`);
   try {
@@ -410,7 +446,10 @@ Header: Authorization: Bearer ${esc(r.token)}</pre>
 }
 
 // ---- Registered API detail: how to use this one API ----
-const PROJECT_DIR = "C:\\Users\\user\\OneDrive\\Documents\\02. Master Degree\\03. Lab\\01. Project\\01. WebCash\\04. BizPlay\\07. Experiment\\01. Bizplay MCP Server";
+// Filled from /api/config at sign-in: the server knows where it keeps the project.
+let SERVER = { project_dir: "/path/to/bizplay-mcp-server" };
+const LOCAL_HOST = /^(127\.|localhost$|::1$|0\.0\.0\.0$)/;
+const hostOf = (url) => { try { return new URL(url).hostname; } catch { return ""; } };
 
 function codeBlock(id, text, note) {
   return `<div class="code-block"><button class="btn small copy" data-copy="${id}"><i class="ph ph-copy"></i> Copy</button><pre id="${id}">${esc(text)}</pre>${note ? `<p class="muted small" style="margin:8px 0 0">${note}</p>` : ""}</div>`;
@@ -431,17 +470,27 @@ function clientGuides(p, tools) {
     : { BIZPLAY_API_BASE_URL: "embedded", BIZPLAY_USER_ID: "emp001", FASTMCP_SHOW_SERVER_BANNER: "false" };
   const desktopCfg = `"${p.id}": ` + JSON.stringify({
     command: "uv",
-    args: ["--directory", PROJECT_DIR, "run", "--no-sync", "python", "-m", localModule],
+    args: ["--directory", SERVER.project_dir, "run", "--no-sync", "python", "-m", localModule],
     env,
   }, null, 2);
+  const remoteCfg = `"${p.id}": ` + JSON.stringify({
+    command: "npx",
+    args: ["-y", "mcp-remote", p.mcp_url, "--header", "Authorization: Bearer <YOUR_AGENT_TOKEN>"],
+  }, null, 2);
+  const endpointIsLocal = LOCAL_HOST.test(hostOf(p.mcp_url));
 
   return {
     "claude-desktop": {
       label: "Claude Desktop", icon: "desktop", ready: true,
-      lead: `Claude Desktop starts the gateway itself as a local program, so this API needs no agent token and no running server. Identity comes from the config.`,
+      lead: `Claude Desktop runs on your own machine, so it either connects to this gateway over the network or starts its own copy locally. Pick one of the two entries below.`,
       steps: [
         { t: "Open the config file", b: `<p>Windows: <span class="mono">%APPDATA%\\Claude\\claude_desktop_config.json</span><br>macOS: <span class="mono">~/Library/Application Support/Claude/claude_desktop_config.json</span></p>` },
-        { t: "Add this entry under mcpServers", b: codeBlock("g-desktop", desktopCfg, "Use the full path to uv.exe if Claude Desktop cannot find it on PATH. Change the identity values to act as a different user.") },
+        { t: `Option A, connect to this gateway${endpointIsLocal ? "" : " (recommended)"}`,
+          b: codeBlock("g-remote", remoteCfg, endpointIsLocal
+            ? "This endpoint is 127.0.0.1, so it only works if Claude Desktop runs on the same machine as the gateway. Use Edit connection to set the address other machines can reach."
+            : "Needs Node.js. Issue a token on the Agent Tokens page and paste it in place of the placeholder.") },
+        { t: "Option B, run a local copy instead",
+          b: codeBlock("g-desktop", desktopCfg, `Replace the directory with the path to the project on the machine running Claude Desktop. This value is where the portal's own server keeps it. No agent token is needed, because identity comes from the config.`) },
         { t: "Quit Claude Desktop from the system tray, then reopen", b: `<p>Closing the window is not enough. The tools appear in the tools menu of a new chat.</p>` },
         { t: "Try it", b: `<p>Ask for something this API covers, for example a call to <span class="mono">${esc(toolName)}</span>.</p>` },
       ],
@@ -520,12 +569,14 @@ pages.provider = async () => {
       </div>
       <p class="card-desc" style="-webkit-line-clamp:3">Spec from ${esc(p.spec_source)}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream API accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : "The gateway sends a stored service token on every call."}</p>
       <div class="card-actions">
+        <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit connection</button>
         <button class="btn small" data-act="test"><i class="ph ph-plugs"></i> Test connection</button>
         <button class="btn small" data-act="access"><i class="ph ph-sliders-horizontal"></i> Manage tools</button>
         <button class="btn small ${p.status === "published" ? "" : "solid"}" data-act="${p.status === "published" ? "unpublish" : "publish"}"><i class="ph ${p.status === "published" ? "ph-eye-slash" : "ph-check"}"></i> ${p.status === "published" ? "Unpublish" : "Publish"}</button>
         ${p.id !== "bizplay" ? `<button class="btn small danger" data-act="delete"><i class="ph ph-trash"></i> Delete</button>` : ""}
       </div>
     </div>
+    ${LOCAL_HOST.test(hostOf(p.mcp_url)) && !LOCAL_HOST.test(location.hostname) ? `<div class="callout warn"><i class="ph ph-warning"></i><span><strong>Other machines cannot reach this endpoint.</strong> It points at ${esc(hostOf(p.mcp_url))}, which only resolves on the server itself. Use Edit connection and set it to <span class="mono">http://${esc(location.hostname)}:${esc(portOf(p.mcp_url))}/mcp</span>, or set PUBLIC_HOST in the server's .env file.</span></div>` : ""}
     <div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">
         <h2 class="section-title" style="margin:0">Use ${esc(p.name)} from ${esc(g.label)}</h2>
@@ -553,6 +604,7 @@ pages.provider = async () => {
     const act = b.dataset.act;
     try {
       if (act === "access") { setHash("access", { p: pid }); return; }
+      if (act === "edit") return editDialog(p);
       if (act === "test") return testDialog(pid);
       if (act === "delete") {
         if (!confirm(`Delete ${p.name}?`)) return;

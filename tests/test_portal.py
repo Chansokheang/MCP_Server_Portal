@@ -127,6 +127,39 @@ async def test_connection_test_without_service_token_reports_clearly(admin, monk
     assert r.json()["ok"] is False
 
 
+async def test_config_reports_project_dir_and_urls(admin, monkeypatch):
+    monkeypatch.setenv("BIZPLAY_PROJECT_DIR", "/srv/bizplay-mcp")
+    c = (await admin.get("/api/config")).json()
+    assert c["project_dir"] == "/srv/bizplay-mcp"
+    assert c["gateway_url"].endswith("/mcp") and c["registry_url"].endswith("/mcp")
+    # Falls back to the host the portal was opened on, not 127.0.0.1.
+    assert "portal.test" in c["registry_url"]
+
+
+async def test_base_url_with_duplicate_path_prefix_is_trimmed(admin):
+    """https://host/api/v1 plus a spec whose paths start with /api/v1 would 404 on every call."""
+    r = await admin.post("/api/registry", json={"name": "Prefixed API", "base_url": "https://host.test/api/v1",
+                                                "spec": SPEC, "auth_mode": "open"})
+    assert r.json()["base_url"] == "https://host.test"
+    assert "/api/v1" in r.json()["note"]
+
+
+async def test_edit_connection(admin):
+    pid = (await admin.post("/api/registry", json={"name": "Editable", "base_url": "http://old.test",
+                                                   "spec": SPEC, "auth_mode": "bearer"})).json()["id"]
+    r = await admin.patch(f"/api/registry/{pid}", json={
+        "base_url": "https://new.test/api/v1", "auth_mode": "open",
+        "mcp_url": "http://203.0.113.10:9011/mcp", "name": "Renamed"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Renamed" and body["auth_mode"] == "open"
+    assert body["base_url"] == "https://new.test", "the duplicated path prefix is trimmed on edit too"
+    assert body["mcp_url"] == "http://203.0.113.10:9011/mcp"
+    # Open mode may now be published without a service token.
+    assert (await admin.post(f"/api/registry/{pid}/publish")).status_code == 200
+    assert (await admin.patch(f"/api/registry/{pid}", json={"auth_mode": "network"})).status_code == 400
+
+
 async def test_public_url_follows_the_published_port(admin, monkeypatch):
     """Agents get the published address, not the container's internal port."""
     monkeypatch.setenv("BIZPLAY_PUBLIC_REGISTRY_URL", "http://mcp.example.com:9011/mcp")

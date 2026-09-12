@@ -264,9 +264,19 @@ and `BIZPLAY_PUBLIC_REGISTRY_URL`, which decide the endpoint the portal shows on
 each API detail page and stores with newly registered APIs. Without them agents
 would be handed a URL that only works inside the container.
 
+If neither variable is set, the portal uses the host the browser opened it on,
+with `BIZPLAY_GATEWAY_PORT` and `BIZPLAY_REGISTRY_PORT` (defaults 8000 and 8002).
+
 Existing entries keep the URL they were registered with. After changing the
-host or ports, either register the API again or reset the demo state with
-`docker compose down -v`.
+host or ports, open the API and use **Edit connection**, or reset the demo state
+with `docker compose down -v`.
+
+### Registering an API: the base URL
+
+Give the **host only**, for example `https://api.example.com`. The paths come
+from the spec. A base URL ending in a path that the spec's paths also start
+with produces `/api/v1/api/v1/...` and a 404 on every call. The portal detects
+that case and trims the duplicate, both on registration and on edit.
 
 Portal state and the audit log live in named volumes (`state`, `logs`) so they
 survive restarts. Set `BIZPLAY_API_TOKENS` in the environment to change the demo
