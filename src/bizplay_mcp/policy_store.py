@@ -72,6 +72,10 @@ def _seed_state() -> dict:
         },
         "agent_tokens": {},
         "security": {
+            # The address agents use, when it differs from what this server
+            # listens on (a tunnel, or nginx with a certificate in front).
+            # Remembered here so it survives deleting every registered API.
+            "public_mcp_url": "",
             "require_upstream_bearer": True,
             "require_gateway_bearer": True,
             "confirm_on_write": True,

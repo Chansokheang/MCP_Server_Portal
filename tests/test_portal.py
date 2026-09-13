@@ -153,17 +153,30 @@ async def test_new_api_starts_with_writes_off(admin):
     assert not any(t["enabled"] for t in tools if t["kind"] == "write")
 
 
-async def test_new_api_inherits_the_https_endpoint_in_use(admin, monkeypatch):
-    """One gateway serves every API, so a new one gets the address that already works."""
+async def test_remembered_public_endpoint_survives_deleting_every_api(admin, monkeypatch):
+    """Setting the public address once must outlive the APIs that used it."""
     monkeypatch.setenv("BIZPLAY_PUBLIC_REGISTRY_URL", "http://127.0.0.1:9014/mcp")
-    first = (await admin.post("/api/registry", json={"name": "Tunnelled", "base_url": "http://a.test",
+    first = (await admin.post("/api/registry", json={"name": "Tunnel User", "base_url": "http://a.test",
                                                      "spec": SPEC, "auth_mode": "open"})).json()["id"]
     await admin.patch(f"/api/registry/{first}", json={"mcp_url": "https://demo.trycloudflare.com/mcp"})
-    await admin.post(f"/api/registry/{first}/publish")
+    assert (await admin.get("/api/security")).json()["settings"]["public_mcp_url"] == "https://demo.trycloudflare.com/mcp"
 
-    second = await admin.post("/api/registry", json={"name": "Second API", "base_url": "http://b.test",
-                                                     "spec": SPEC, "auth_mode": "open"})
-    assert second.json()["mcp_url"] == "https://demo.trycloudflare.com/mcp"
+    await admin.delete(f"/api/registry/{first}")  # every spec-backed API is gone
+    again = await admin.post("/api/registry", json={"name": "After Wipe", "base_url": "http://b.test",
+                                                    "spec": SPEC, "auth_mode": "open"})
+    assert again.json()["mcp_url"] == "https://demo.trycloudflare.com/mcp"
+
+
+async def test_any_endpoint_the_caller_gives_is_used_as_is(admin):
+    """No guessing: whatever endpoint is supplied is stored, http or https, any path."""
+    for url in ("https://mcp.example.com/mcp", "http://10.0.0.5:9014/mcp",
+                "https://gw.example.com/tenants/acme/mcp"):
+        r = await admin.post("/api/registry", json={"name": f"API {url}", "base_url": "http://x.test",
+                                                    "spec": SPEC, "auth_mode": "open", "mcp_url": url})
+        assert r.json()["mcp_url"] == url
+    bad = await admin.post("/api/registry", json={"name": "Bad URL", "base_url": "http://x.test",
+                                                  "spec": SPEC, "auth_mode": "open", "mcp_url": "not-a-url"})
+    assert bad.status_code == 400
 
 
 async def test_base_url_with_duplicate_path_prefix_is_trimmed(admin):

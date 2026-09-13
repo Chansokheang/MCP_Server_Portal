@@ -257,6 +257,8 @@ async function registerDialog() {
     <form id="reg-form" class="form">
       <label class="field">Provider name <input name="name" placeholder="e.g. Bizplay HR API" required></label>
       <label class="field">Base URL of the existing API <input name="base_url" placeholder="https://api.example.com" required></label>
+      <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(SERVER.default_mcp_url || "")}" placeholder="https://your-host/mcp">
+        <span class="muted small">Any address that reaches this gateway. Use an HTTPS one for claude.ai and ChatGPT.</span></label>
       <label class="field">How is the API protected?
         <select name="auth_mode" id="reg-mode">
           <option value="bearer">Bearer token: the API rejects anonymous calls (recommended)</option>
@@ -737,6 +739,8 @@ pages.security = async () => {
             <label class="check"><input type="checkbox" class="switch" data-s="require_gateway_bearer" ${s.require_gateway_bearer ? "checked" : ""}> Require an agent token on the MCP gateway (HTTP)</label>
             <label class="check"><input type="checkbox" class="switch" data-s="confirm_on_write" ${s.confirm_on_write ? "checked" : ""}> Force user confirmation on all write tools</label>
             <label class="field">Default agent token lifetime (days) <input type="number" data-s="token_ttl_days" value="${s.token_ttl_days}" min="1" max="365" style="width:140px"></label>
+            <label class="field">Public MCP endpoint <input data-s="public_mcp_url" value="${esc(s.public_mcp_url || "")}" placeholder="https://your-host/mcp, blank to use this server's own address">
+              <span class="muted small">The address agents reach the gateway on, when a tunnel or nginx sits in front. Every newly registered API inherits it.</span></label>
           </div>
           <p class="muted small" style="margin:12px 0 0">The agent token switch is enforced by the gateways, which read it at startup, so restart them after changing it. Turning it off lets anyone call the gateway and lowers the checklist score. The upstream switch records policy only, since that is the provider's own API.</p>
         </div>
@@ -752,7 +756,8 @@ pages.security = async () => {
       </div>
     </div>`;
   $("#page").querySelectorAll("[data-s]").forEach((inp) => inp.onchange = async () => {
-    const body = { [inp.dataset.s]: inp.type === "checkbox" ? inp.checked : Number(inp.value) };
+    const value = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
+    const body = { [inp.dataset.s]: value };
     try { await api("PUT", "/api/security", body); toast("Settings saved"); if (inp.dataset.s === "confirm_on_write") pages.security(); } catch (err) { toast("Save failed", err.message, 4500); }
   });
   $("#page").querySelectorAll("[data-rotate]").forEach((b) => b.onclick = async () => {

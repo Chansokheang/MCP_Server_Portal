@@ -114,6 +114,8 @@ async def config(request: Request):
         "project_dir": os.environ.get("BIZPLAY_PROJECT_DIR", str(PROJECT_ROOT)),
         "gateway_url": policy_store.public_url("curated", request.url.hostname),
         "registry_url": policy_store.public_url("registry", request.url.hostname),
+        # What the register dialog prefills; the person registering can change it.
+        "default_mcp_url": _default_endpoint(policy_store.load(), request.url.hostname),
         # When false, the gateways accept anonymous HTTP callers (demo only).
         "require_agent_token": bool(policy_store.load()["security"]["require_gateway_bearer"]),
     })
@@ -181,16 +183,13 @@ async def list_registry(request: Request):
     return JSONResponse({"items": [_public_provider(p) for p in state["providers"].values()]})
 
 
-def _preferred_endpoint(state: dict, host: str | None) -> str:
-    """The MCP address a new API should advertise.
+def _default_endpoint(state: dict, host: str | None) -> str:
+    """The endpoint to offer when registering, which the caller may replace.
 
-    Every registered API is served by the same registry gateway, so a new one
-    inherits whatever endpoint the others already use. An HTTPS address wins,
-    because claude.ai and ChatGPT refuse plain HTTP.
+    The public address set on the Security page wins; otherwise this server's
+    own address. It is only a prefill: whatever the caller sends is used as is.
     """
-    used = [p.get("mcp_url", "") for p in policy_store.published_registry_providers(state)]
-    return next((u for u in used if u.startswith("https://")),
-                next((u for u in used if u), policy_store.public_url("registry", host)))
+    return state["security"].get("public_mcp_url", "").strip() or policy_store.public_url("registry", host)
 
 
 def _normalize_base_url(base_url: str, spec: dict) -> tuple[str, str]:
@@ -239,6 +238,10 @@ async def register_provider(request: Request):
     if not isinstance(spec, dict) or "paths" not in spec:
         raise ApiError(400, "spec must be an OpenAPI document with 'paths'")
     base_url, base_note = _normalize_base_url(base_url, spec)
+    # Whatever endpoint the caller gives is used verbatim; the default is a prefill.
+    mcp_url = (body.get("mcp_url") or "").strip()
+    if mcp_url and not mcp_url.startswith("http"):
+        raise ApiError(400, "mcp_url must start with http")
     auth_mode = body.get("auth_mode") or "bearer"
     if auth_mode not in policy_store.AUTH_MODES:
         raise ApiError(400, f"auth_mode must be one of {', '.join(policy_store.AUTH_MODES)}")
@@ -246,6 +249,7 @@ async def register_provider(request: Request):
     if auth_mode == "network" and not allowlist:
         raise ApiError(400, "network mode needs the gateway address the API allows (allowlist)")
     state = policy_store.load()
+    mcp_url = mcp_url or _default_endpoint(state, request.url.hostname)
     pid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "provider"
     if pid in state["providers"]:
         pid = f"{pid}-{secrets.token_hex(2)}"
@@ -257,10 +261,7 @@ async def register_provider(request: Request):
     state["providers"][pid] = {
         "id": pid, "name": name, "owner": request.state.user, "base_url": base_url,
         "spec_source": body.get("spec_source") or "uploaded", "spec": spec,
-        # The address agents will use. One gateway serves every registered API,
-        # so reuse the endpoint already in use, preferring an HTTPS one since
-        # cloud clients refuse plain HTTP.
-        "mcp_url": _preferred_endpoint(state, request.url.hostname),
+        "mcp_url": mcp_url,
         "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},
@@ -285,6 +286,9 @@ async def update_provider(request: Request):
         p["base_url"], note = _normalize_base_url(base_url, p.get("spec") or {})
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
+        # One gateway, one public address: remember it for the next registration.
+        if p["mcp_url"].startswith("https://"):
+            state["security"]["public_mcp_url"] = p["mcp_url"]
     if "auth_mode" in body:
         if body["auth_mode"] not in policy_store.AUTH_MODES:
             raise ApiError(400, f"auth_mode must be one of {', '.join(policy_store.AUTH_MODES)}")
@@ -480,6 +484,11 @@ async def update_security(request: Request):
             sec[key] = bool(body[key])
     if "token_ttl_days" in body:
         sec["token_ttl_days"] = max(1, min(365, int(body["token_ttl_days"])))
+    if "public_mcp_url" in body:
+        url = body["public_mcp_url"].strip()
+        if url and not url.startswith("http"):
+            raise ApiError(400, "public_mcp_url must start with http")
+        sec["public_mcp_url"] = url
     if body.get("confirm_on_write"):
         for p in state["providers"].values():
             for t in p["tools"].values():
