@@ -155,6 +155,17 @@ function go(page) {
 document.querySelectorAll(".rail-nav a").forEach((a) => a.addEventListener("click", () => go(a.dataset.page)));
 window.addEventListener("hashchange", () => session && go(location.hash.slice(1).split("?")[0]));
 
+/** Re-run the current page's fetch, keeping the tab and provider you are on. */
+function refreshPage() {
+  const page = (location.hash.slice(1).split("?")[0]) || "overview";
+  if (session && pages[page] && $("#modal").classList.contains("hidden")) pages[page]().catch(() => {});
+}
+$("#refresh").addEventListener("click", () => { refreshPage(); toast("Reloaded"); });
+// Coming back to the tab shows current data, so registering an API elsewhere
+// (or from a script) does not leave a stale page behind.
+window.addEventListener("focus", refreshPage);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPage(); });
+
 // Tab strip: [{key, label, icon, count}], plus optional note {title, sub}.
 function renderTabs(items, active, onPick, note) {
   const el = $("#tabs");

@@ -46,6 +46,20 @@ def _mask(secret: str) -> str:
 
 
 # --- auth -------------------------------------------------------------------
+class NoCacheUIMiddleware(BaseHTTPMiddleware):
+    """Serve the UI with revalidation, so a deploy needs no hard reload.
+
+    Files still return 304 when unchanged, so this costs one conditional
+    request per asset rather than a full download.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 class SessionAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -517,7 +531,7 @@ app = Starlette(
         Mount("/static", StaticFiles(directory=STATIC_DIR), name="static"),
     ],
     exception_handlers={ApiError: api_error},
-    middleware=[Middleware(SessionAuthMiddleware)],
+    middleware=[Middleware(NoCacheUIMiddleware), Middleware(SessionAuthMiddleware)],
 )
 
 

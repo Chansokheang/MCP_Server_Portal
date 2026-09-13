@@ -127,6 +127,14 @@ async def test_connection_test_without_service_token_reports_clearly(admin, monk
     assert r.json()["ok"] is False
 
 
+async def test_ui_is_served_with_revalidation(portal):
+    """A deploy should not need a hard reload to take effect."""
+    for path in ("/", "/static/app.js"):
+        r = await portal.get(path)
+        assert r.status_code == 200
+        assert "no-cache" in r.headers.get("cache-control", "")
+
+
 async def test_config_reports_project_dir_and_urls(admin, monkeypatch):
     monkeypatch.setenv("BIZPLAY_PROJECT_DIR", "/srv/bizplay-mcp")
     c = (await admin.get("/api/config")).json()
