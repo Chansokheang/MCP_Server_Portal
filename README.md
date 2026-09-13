@@ -70,7 +70,10 @@ removed from responses.
 
 `bizplay_mcp/registry_gateway.py` serves every published provider from the spec
 stored in the portal, with tool names prefixed by the provider id
-(`bizplay_classifier_getAllCorps`). Restart it after publishing a new provider.
+(`bizplay_classifier_getAllCorps`). Publishing a new API adds its tools on the
+next request, with no restart. Unpublishing hides and refuses the tools, though
+they stay loaded until the next restart. Changing the agent token requirement
+does need one, because that is fixed when the server starts.
 
 ```bash
 uv run --no-sync python -m bizplay_mcp.registry_gateway --transport http --port 8002
@@ -294,7 +297,7 @@ docker compose up --build
 | Service | Default published port | Container port | Notes |
 |---|---|---|---|
 | gateway | 9010 | 8000 | Curated tools, calls `legacy-api` by service name |
-| registry-gateway | 9011 | 8002 | Reads published providers at startup; `docker compose restart registry-gateway` after publishing |
+| registry-gateway | 9011 | 8002 | Serves every published API; new ones appear without a restart |
 | portal | 9012 | 18090 | Writes the shared state volume |
 | legacy-api | 9013 | 18080 | Mock of the existing Bizplay API; drop the mapping in production |
 

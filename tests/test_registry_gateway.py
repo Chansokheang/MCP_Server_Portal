@@ -158,6 +158,25 @@ async def test_role_policy_applies(admin, open_provider, as_company):
             await c.call_tool("open_corp_api_getAllCorps", {})
 
 
+async def test_new_provider_appears_without_a_restart(admin, open_provider, as_company):
+    """Registering and publishing an API mid-flight adds its tools to a live gateway."""
+    as_company("1078836129")
+    gw = gateway()
+    async with Client(gw) as c:
+        before = {t.name for t in await c.list_tools()}
+    assert not any(n.startswith("late_api_") for n in before)
+
+    r = await admin.post("/api/registry", json={"name": "Late API", "base_url": "http://open.test",
+                                                "spec": SPEC, "auth_mode": "open"})
+    await admin.post(f"/api/registry/{r.json()['id']}/publish")
+
+    async with Client(gw) as c:  # same gateway object, never restarted
+        after = {t.name for t in await c.list_tools()}
+        assert "late_api_getAllCorps" in after, "the newly published API is served immediately"
+        result = await c.call_tool("late_api_getAllCorps", {})
+        assert result.structured_content["payload"][0]["corpName"] == "DemoCorp01"
+
+
 async def test_unpublished_provider_is_not_served(admin, open_provider, as_company):
     as_company("1078836129")
     await admin.post(f"/api/registry/{open_provider}/unpublish")

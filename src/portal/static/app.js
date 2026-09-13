@@ -226,7 +226,7 @@ pages.registry = async () => {
         </div>`).join("")}</div>`
       : `<div class="card">${emptyState("plugs-connected", "No APIs here", "Register one with an OpenAPI spec. The API itself is not changed.")}</div>`}
     </div>
-    <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> makes the MCP endpoint reachable by agents and enforces this portal's tool policy. Listing in public directories (official MCP Registry, Claude, Copilot Studio, Agentforce) is a separate step.</span></div>`;
+    <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> makes the MCP endpoint reachable by agents and enforces this portal's tool policy. The gateway picks up a newly published API on the next request, so no restart is needed. Listing in public directories (official MCP Registry, Claude, Copilot Studio, Agentforce) is a separate step.</span></div>`;
 
   $("#btn-register").onclick = registerDialog;
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
@@ -277,8 +277,11 @@ async function registerDialog() {
   };
   $("#reg-form").onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
-    try { const p = await api("POST", "/api/registry", { ...f, spec_source: "uploaded" }); closeModal(); toast("Registered as draft", `${p.tool_count} tools generated from the spec`); pages.registry(); }
-    catch (err) { $("#reg-error").textContent = err.message; }
+    try {
+      const p = await api("POST", "/api/registry", { ...f, spec_source: "uploaded" });
+      toast("Registered as draft", `${p.tool_count} tools generated from the spec`);
+      testDialog(p.id);  // prove the connection now, while the details are fresh
+    } catch (err) { $("#reg-error").textContent = err.message; }
   };
 }
 
@@ -368,11 +371,25 @@ async function testDialog(id) {
   modal(`<h2><i class="ph ph-plugs"></i> Connection test: ${esc(id)}</h2>${SKELETON}`);
   try {
     const r = await api("POST", `/api/registry/${id}/test`);
+    const p = (await api("GET", "/api/registry")).items.find((x) => x.id === id) || {};
+    // The most common registration mistake: an open API registered as bearer.
+    const answersAnonymously = r.results.some((x) => x.check.includes("rejects missing token") && x.status === 200);
+    const suggestOpen = p.auth_mode === "bearer" && answersAnonymously;
     modal(`<h2><i class="ph ph-plugs"></i> Connection test: ${esc(id)} ${passChip(r.ok)}</h2>
+      ${suggestOpen ? `<div class="callout warn" style="margin-bottom:12px"><i class="ph ph-warning"></i><span><strong>This API answers without a token.</strong> It is registered as Bearer, which means "rejects anonymous calls", so the test fails and publishing is blocked. Switch it to Open if that is how the API is meant to work.</span></div>` : ""}
       <div class="table-card"><div class="table-wrap"><table><tr><th>Check</th><th>Path</th><th>HTTP</th><th>Result</th></tr>
       ${r.results.map((x) => `<tr><td>${esc(x.check)}</td><td class="mono">${esc(x.path)}</td><td class="mono">${x.status ?? "n/a"}</td><td>${passChip(x.ok)}${x.error ? `<div class="muted small">${esc(x.error)}</div>` : ""}${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ""}</td></tr>`).join("")}</table></div></div>
       <p class="muted small" style="margin-top:12px">In bearer mode a failing "rejects missing token" check blocks publishing. In open mode the API is public by decision and the gateway carries all the enforcement.</p>
-      <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btn solid" onclick="document.getElementById('modal').classList.add('hidden')">Close</button></div>`);
+      <div style="display:flex;justify-content:${suggestOpen ? "space-between" : "flex-end"};gap:8px;margin-top:8px">
+        ${suggestOpen ? `<button class="btn solid" id="t-open"><i class="ph ph-lock-open"></i> Switch to Open mode</button>` : ""}
+        <button class="btn" id="t-close">Close</button></div>`);
+    $("#t-close").onclick = () => { closeModal(); pages.registry(); };
+    if (suggestOpen) {
+      $("#t-open").onclick = async () => {
+        try { await api("PATCH", `/api/registry/${id}`, { auth_mode: "open" }); toast("Switched to Open mode", "Recorded as an accepted risk"); testDialog(id); }
+        catch (err) { toast("Could not switch", err.message, 4500); }
+      };
+    }
   } catch (err) { modal(`<h2>Connection test</h2><p class="error">${esc(err.message)}</p>`); }
 }
 

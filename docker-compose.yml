@@ -75,8 +75,8 @@ services:
 
   registry-gateway:
     <<: *app
-    # Builds its tools from the providers published in the portal at startup.
-    # Restart this service after publishing a new provider.
+    # Serves the providers published in the portal, picking up newly published
+    # ones on the next request. Only a changed auth requirement needs a restart.
     command: ["bizplay-mcp-registry", "--transport", "http", "--host", "0.0.0.0", "--port", "8002"]
     environment:
       <<: *public-env

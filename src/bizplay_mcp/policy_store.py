@@ -108,9 +108,22 @@ def public_url(which: str, host: str | None = None) -> str:
     }[which]
     explicit = os.environ.get(url_env)
     if explicit:
+        # A configured localhost URL is useless to anything off the server. When
+        # the portal is being used from elsewhere, keep the port but use the host
+        # the browser reached us on.
+        if host and not _is_local(host) and _is_local(_host_of(explicit)):
+            return explicit.replace(_host_of(explicit), host, 1)
         return explicit
     port = os.environ.get(port_env, default_port)
     return f"http://{host or '127.0.0.1'}:{port}/mcp"
+
+
+def _host_of(url: str) -> str:
+    return url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0]
+
+
+def _is_local(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 
 
 def state_path() -> Path:
