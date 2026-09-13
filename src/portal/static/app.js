@@ -285,9 +285,12 @@ async function registerDialog() {
 /** Ready-to-paste commands. Issues a token first when the gateway needs one. */
 function commandResult(p, token) {
   const hdr = token ? ` \\\n  --header "Authorization: Bearer ${token}"` : "";
+  const plainHttp = p.mcp_url.startsWith("http://") && !LOCAL_HOST.test(hostOf(p.mcp_url));
   const desktop = `"${p.id}": ` + JSON.stringify({
     command: "npx",
-    args: ["-y", "mcp-remote", p.mcp_url, ...(token ? ["--header", `Authorization: Bearer ${token}`] : [])],
+    args: ["-y", "mcp-remote", p.mcp_url, "--transport", "http-only",
+      ...(plainHttp ? ["--allow-http"] : []),
+      ...(token ? ["--header", `Authorization: Bearer ${token}`] : [])],
   }, null, 2);
   modal(`<h2><i class="ph ph-terminal-window"></i> Connect to ${esc(p.name)}</h2>
     ${token ? `<p class="muted">A token was issued for this command. It is shown once, so copy the command now. Revoke it any time on the Agent Tokens page.</p>`
@@ -519,10 +522,12 @@ function clientGuides(p, tools) {
   }, null, 2);
   // With the agent-token requirement switched off there is no header to send.
   const needsToken = SERVER.require_agent_token !== false;
-  const remoteCfg = `"${p.id}": ` + JSON.stringify({
-    command: "npx",
-    args: ["-y", "mcp-remote", p.mcp_url, ...(needsToken ? ["--header", "Authorization: Bearer <YOUR_AGENT_TOKEN>"] : [])],
-  }, null, 2);
+  // mcp-remote refuses plain HTTP to anything but localhost without --allow-http.
+  const plainHttpRemote = p.mcp_url.startsWith("http://") && !LOCAL_HOST.test(hostOf(p.mcp_url));
+  const remoteArgs = ["-y", "mcp-remote", p.mcp_url, "--transport", "http-only",
+    ...(plainHttpRemote ? ["--allow-http"] : []),
+    ...(needsToken ? ["--header", "Authorization: Bearer <YOUR_AGENT_TOKEN>"] : [])];
+  const remoteCfg = `"${p.id}": ` + JSON.stringify({ command: "npx", args: remoteArgs }, null, 2);
   const headerArg = needsToken ? ` \\\n  --header "Authorization: Bearer <YOUR_AGENT_TOKEN>"` : "";
   const endpointIsLocal = LOCAL_HOST.test(hostOf(p.mcp_url));
 

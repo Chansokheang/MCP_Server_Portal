@@ -119,6 +119,17 @@ async def test_results_are_scoped_to_callers_company(open_provider, as_company, 
     assert last["outcome"] == "ok" and "1 record(s) outside company" in last["detail"]
 
 
+async def test_without_a_company_scoping_is_skipped_not_refused(open_provider, monkeypatch):
+    """Token-free demo mode: no identity means no scoping, and tools still work."""
+    monkeypatch.delenv("BIZPLAY_COMPANY", raising=False)
+    monkeypatch.setenv("BIZPLAY_ROLE", "employee")
+    async with Client(gateway()) as c:
+        one = await c.call_tool("open_corp_api_getCorpByCorpNo", {"corpNo": "2200000000"})
+        assert one.structured_content["payload"]["corpName"] == "OtherCorp"
+        every = await c.call_tool("open_corp_api_getAllCorps", {})
+        assert len(every.structured_content["payload"]) == 2, "nothing is filtered out"
+
+
 async def test_cannot_name_another_company_in_arguments(open_provider, as_company):
     as_company("1078836129")
     async with Client(gateway()) as c:

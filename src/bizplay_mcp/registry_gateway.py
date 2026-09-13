@@ -88,7 +88,10 @@ class GovernanceMiddleware(Middleware):
             raise ToolError(f"Access denied: {reason}")
 
         # Company scoping on inputs: a caller may only name their own company.
-        for key in policy_store.COMPANY_KEYS:
+        # With no company on the caller (token requirement switched off) there is
+        # nothing to scope to, so the check is skipped rather than refusing every
+        # call. Set BIZPLAY_COMPANY to scope an anonymous gateway to one company.
+        for key in policy_store.COMPANY_KEYS if company else ():
             if key in arguments and arguments[key] is not None and str(arguments[key]) != company:
                 reason = f"{key}={arguments[key]} is not the caller's company"
                 audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
