@@ -86,6 +86,24 @@ services:
       portal:
         condition: service_started
 
+  # Optional: an HTTPS address for clients that refuse plain HTTP, such as
+  # claude.ai and ChatGPT. Not started by default.
+  #
+  #   docker compose --profile tunnel up -d tunnel
+  #   docker compose logs tunnel | grep trycloudflare.com
+  #
+  # The URL is random and changes on every restart, and the tunnel is public
+  # with no authentication in front of it. For a stable address, put nginx with
+  # a certificate in front of the registry gateway instead.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://registry-gateway:8002
+    depends_on:
+      registry-gateway:
+        condition: service_started
+
 volumes:
   state:
   logs:

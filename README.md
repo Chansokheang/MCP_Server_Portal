@@ -164,6 +164,39 @@ client needs:
 | ChatGPT, Claude.ai | Remote connector, needs public HTTPS and OAuth | Not yet |
 | Copilot Studio, Agentforce | Remote MCP server, needs public HTTPS and OAuth | Not yet |
 
+### An HTTPS address for claude.ai and ChatGPT
+
+Those clients refuse plain HTTP, so the gateway needs TLS. Two ways:
+
+**A throwaway URL, no DNS or certificate work.** A Cloudflare quick tunnel:
+
+```bash
+docker compose --profile tunnel up -d tunnel && docker compose logs tunnel | grep trycloudflare.com
+```
+
+The printed `https://...trycloudflare.com` plus `/mcp` is the connector URL. It
+changes every restart and is open to anyone who has it.
+
+**A stable URL.** Point a subdomain at the server and terminate TLS with nginx:
+
+```bash
+sudo certbot --nginx -d mcp.example.com
+```
+
+```nginx
+location /mcp {
+    proxy_pass http://127.0.0.1:9011;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection '';
+    proxy_buffering off;      # MCP streams responses; buffering makes it hang
+    proxy_read_timeout 3600s;
+}
+```
+
+Then set the API's endpoint to the HTTPS URL with **Edit connection**, and add it
+in claude.ai under Settings, Connectors, Add custom connector.
+
 ### The one-line shortcut
 
 On an API's detail page, **Connect command** issues a token and prints commands

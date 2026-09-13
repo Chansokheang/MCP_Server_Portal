@@ -569,15 +569,37 @@ function clientGuides(p, tools) {
         { t: "Raw HTTP, to check the token", b: codeBlock("g-curl", `curl -s ${p.mcp_url} \\\n  -H "Authorization: Bearer <YOUR_AGENT_TOKEN>" \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json" \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",\n       "params":{"protocolVersion":"2025-06-18","capabilities":{},\n                 "clientInfo":{"name":"curl","version":"0"}}}'`, "Without the header this returns 401. That is the gateway refusing an unauthenticated agent.") },
       ],
     },
-    "chatgpt": {
-      label: "ChatGPT and Claude.ai", icon: "globe", ready: false,
-      lead: `These are cloud products. They cannot reach ${esc(p.mcp_url.replace(/^https?:\/\//, "").split("/")[0])}, and their connector settings have no field for a static bearer token.`,
-      steps: [
-        { t: "Give this endpoint a public HTTPS address", b: `<p>Use a tunnel for a demo, or deploy the gateway to a server.</p>${codeBlock("g-tunnel", `cloudflared tunnel --url http://127.0.0.1:${port}\n\n# or\nngrok http ${port}`, "The HTTPS address the tool prints becomes the MCP endpoint, with the same path.")}` },
-        { t: "Add OAuth to the gateway", b: `<p>Both clients start an OAuth login when you add a remote MCP server. The gateway verifies tokens issued in this portal, so it needs an OAuth provider and a login page. FastMCP ships the providers, so this is configuration rather than a rewrite.</p>` },
-        { t: "Then add it in the product", b: `<p>ChatGPT: Settings, Connectors, Add. Claude.ai: Settings, Connectors, Add custom connector. Paste the HTTPS endpoint and sign in when prompted.</p>` },
-      ],
-    },
+    "chatgpt": (() => {
+      const isHttps = p.mcp_url.startsWith("https://");
+      const ready = isHttps && !needsToken;
+      const addSteps = [
+        { t: "Copy this endpoint", b: codeBlock("g-url", p.mcp_url, "This exact URL, including the /mcp path. The root path serves nothing and shows Not found.") },
+        { t: "Add it in claude.ai", b: `<p>Settings, then Connectors, then Add custom connector. Paste the URL, give it a name, and click Add. It appears in the chat's tool menu.</p>` },
+        { t: "Add it in ChatGPT", b: `<p>Settings, then Connectors, then Add. Paste the same URL. Requires a plan that allows custom connectors.</p>` },
+        { t: "Ask for something", b: `<p class="mono">List the corporations I can see.</p><p class="mono">What classification rules does my company have?</p>` },
+      ];
+      if (ready) {
+        return { label: "ChatGPT and Claude.ai", icon: "globe", ready: true,
+          lead: `This endpoint is public HTTPS and needs no sign-in, so both products can connect to it directly.`,
+          steps: addSteps };
+      }
+      return {
+        label: "ChatGPT and Claude.ai", icon: "globe", ready: false,
+        lead: isHttps
+          ? `The address is fine, but this gateway requires an agent token and these products have no field for one. Turn the requirement off on the Security page for a demo, or add OAuth.`
+          : `These products refuse plain HTTP. Give the gateway an HTTPS address first, then add it the same way.`,
+        steps: [
+          ...(isHttps ? [] : [{ t: "Put HTTPS in front of it", b:
+            `<p>Quickest for a demo, a Cloudflare quick tunnel on the server:</p>
+             ${codeBlock("g-tunnel", `docker run -d --restart unless-stopped --name mcp-tunnel --network host \\\n  cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://localhost:${port}\n\ndocker logs mcp-tunnel 2>&1 | grep -o 'https://[a-z0-9-]*\\.trycloudflare\\.com'`,
+             "The printed address plus /mcp is the connector URL. It changes every restart and is open to anyone who has it. For a stable URL, terminate TLS with nginx and proxy to this port, with proxy_buffering off.")}
+             <p class="muted small" style="margin-top:8px">Then set that address here with Edit connection, so these instructions and any new tokens use it.</p>` }]),
+          ...(needsToken ? [{ t: "Allow connections without a token", b:
+            `<p>These products sign in with OAuth and cannot send a static token. For a demo, switch off the agent token requirement on the Security page and restart the gateways. For production, add an OAuth provider instead.</p>` }] : []),
+          ...addSteps,
+        ],
+      };
+    })(),
     "enterprise": {
       label: "Copilot Studio and Agentforce", icon: "buildings", ready: false,
       lead: `Both support remote MCP servers and need the same public HTTPS address and OAuth login as the cloud chat products.`,
@@ -618,7 +640,9 @@ pages.provider = async () => {
         <span style="display:flex;gap:6px;flex-wrap:wrap">${authChip(p.auth_mode)}${statusChip(p.status)}</span>
       </div>
       <div class="tiles" style="grid-template-columns:repeat(4, 1fr)">
-        ${tile("link", "MCP endpoint", p.mcp_url, true)}
+        <div class="tile"><span class="k"><i class="ph ph-link"></i>MCP endpoint
+          <button class="btn small copy" data-copy="p-endpoint" title="Copy the endpoint" style="margin-left:auto;padding:2px 7px"><i class="ph ph-copy"></i></button></span>
+          <span class="v mono" id="p-endpoint">${esc(p.mcp_url)}</span></div>
         ${tile("cloud", "Upstream API", p.base_url.replace(/^https?:\/\//, ""), true)}
         ${tile("plug", "Tools", `${p.tools_enabled} of ${p.tool_count} enabled`)}
         ${tile("textbox", "Tool names", p.tool_prefix ? `${p.tool_prefix}*` : "no prefix")}
