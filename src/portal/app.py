@@ -181,6 +181,18 @@ async def list_registry(request: Request):
     return JSONResponse({"items": [_public_provider(p) for p in state["providers"].values()]})
 
 
+def _preferred_endpoint(state: dict, host: str | None) -> str:
+    """The MCP address a new API should advertise.
+
+    Every registered API is served by the same registry gateway, so a new one
+    inherits whatever endpoint the others already use. An HTTPS address wins,
+    because claude.ai and ChatGPT refuse plain HTTP.
+    """
+    used = [p.get("mcp_url", "") for p in policy_store.published_registry_providers(state)]
+    return next((u for u in used if u.startswith("https://")),
+                next((u for u in used if u), policy_store.public_url("registry", host)))
+
+
 def _normalize_base_url(base_url: str, spec: dict) -> tuple[str, str]:
     """Drop a path from the base URL when the spec's own paths already carry it.
 
@@ -205,7 +217,8 @@ def _tools_from_spec(spec: dict) -> dict:
                 continue
             name = op.get("operationId") or re.sub(r"[^a-z0-9]+", "_", f"{method}_{path}".lower()).strip("_")
             kind = "read" if method.lower() == "get" else "write"
-            tools[name] = {"kind": kind, "enabled": True, "roles": ["employee", "manager"],
+            # Reads are on, writes and deletes are off until someone chooses them.
+            tools[name] = {"kind": kind, "enabled": kind == "read", "roles": ["employee", "manager"],
                            "confirm": kind == "write", "summary": op.get("summary", ""),
                            "route": f"{method.upper()} {path}"}
     return tools
@@ -244,9 +257,10 @@ async def register_provider(request: Request):
     state["providers"][pid] = {
         "id": pid, "name": name, "owner": request.state.user, "base_url": base_url,
         "spec_source": body.get("spec_source") or "uploaded", "spec": spec,
-        # The address agents will use. Set BIZPLAY_PUBLIC_REGISTRY_URL when the
-        # gateway is published on a different host or port than it listens on.
-        "mcp_url": policy_store.public_url("registry", request.url.hostname),
+        # The address agents will use. One gateway serves every registered API,
+        # so reuse the endpoint already in use, preferring an HTTPS one since
+        # cloud clients refuse plain HTTP.
+        "mcp_url": _preferred_endpoint(state, request.url.hostname),
         "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},

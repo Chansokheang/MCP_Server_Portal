@@ -106,7 +106,8 @@ async def test_tools_are_namespaced_by_provider(open_provider, as_company):
     as_company("1078836129")
     async with Client(gateway()) as c:
         names = {t.name for t in await c.list_tools()}
-    assert {"open_corp_api_getAllCorps", "open_corp_api_getCorpByCorpNo", "open_corp_api_deleteCorpByCorpNo"} <= names
+    assert {"open_corp_api_getAllCorps", "open_corp_api_getCorpByCorpNo"} <= names
+    assert "open_corp_api_deleteCorpByCorpNo" not in names, "writes stay off until someone enables them"
 
 
 async def test_results_are_scoped_to_callers_company(open_provider, as_company, wiring):
@@ -130,8 +131,9 @@ async def test_without_a_company_scoping_is_skipped_not_refused(open_provider, m
         assert len(every.structured_content["payload"]) == 2, "nothing is filtered out"
 
 
-async def test_cannot_name_another_company_in_arguments(open_provider, as_company):
+async def test_cannot_name_another_company_in_arguments(admin, open_provider, as_company):
     as_company("1078836129")
+    await admin.put(f"/api/registry/{open_provider}/tools/deleteCorpByCorpNo", json={"enabled": True})
     async with Client(gateway()) as c:
         with pytest.raises(ToolError, match="not the caller's company"):
             await c.call_tool("open_corp_api_getCorpByCorpNo", {"corpNo": "2200000000"})

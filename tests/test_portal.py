@@ -144,6 +144,28 @@ async def test_config_reports_project_dir_and_urls(admin, monkeypatch):
     assert "portal.test" in c["registry_url"]
 
 
+async def test_new_api_starts_with_writes_off(admin):
+    """A fresh registration must not hand agents delete tools by default."""
+    pid = (await admin.post("/api/registry", json={"name": "Fresh API", "base_url": "http://f.test",
+                                                   "spec": SPEC, "auth_mode": "open"})).json()["id"]
+    tools = (await admin.get(f"/api/registry/{pid}/tools")).json()["items"]
+    assert all(t["enabled"] for t in tools if t["kind"] == "read")
+    assert not any(t["enabled"] for t in tools if t["kind"] == "write")
+
+
+async def test_new_api_inherits_the_https_endpoint_in_use(admin, monkeypatch):
+    """One gateway serves every API, so a new one gets the address that already works."""
+    monkeypatch.setenv("BIZPLAY_PUBLIC_REGISTRY_URL", "http://127.0.0.1:9014/mcp")
+    first = (await admin.post("/api/registry", json={"name": "Tunnelled", "base_url": "http://a.test",
+                                                     "spec": SPEC, "auth_mode": "open"})).json()["id"]
+    await admin.patch(f"/api/registry/{first}", json={"mcp_url": "https://demo.trycloudflare.com/mcp"})
+    await admin.post(f"/api/registry/{first}/publish")
+
+    second = await admin.post("/api/registry", json={"name": "Second API", "base_url": "http://b.test",
+                                                     "spec": SPEC, "auth_mode": "open"})
+    assert second.json()["mcp_url"] == "https://demo.trycloudflare.com/mcp"
+
+
 async def test_base_url_with_duplicate_path_prefix_is_trimmed(admin):
     """https://host/api/v1 plus a spec whose paths start with /api/v1 would 404 on every call."""
     r = await admin.post("/api/registry", json={"name": "Prefixed API", "base_url": "https://host.test/api/v1",
