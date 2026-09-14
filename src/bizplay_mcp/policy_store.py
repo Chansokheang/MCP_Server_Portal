@@ -98,8 +98,10 @@ KINDS = {
 
 # Argument names / response fields that identify a company. The gateway
 # forces them to match the caller's token when the upstream API cannot
-# scope data itself.
-COMPANY_KEYS = ("corpNo", "corp_no", "company", "companyId", "corporationId")
+# scope data itself. Override for APIs that name the field differently:
+#   BIZPLAY_COMPANY_KEYS=tenantId,orgId
+COMPANY_KEYS = tuple(k.strip() for k in os.environ.get(
+    "BIZPLAY_COMPANY_KEYS", "corpNo,corp_no,company,companyId,corporationId").split(",") if k.strip())
 
 
 def public_url(which: str, host: str | None = None) -> str:

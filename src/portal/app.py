@@ -24,7 +24,6 @@ from pathlib import Path
 
 import httpx
 from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -217,7 +216,7 @@ def _default_endpoint(state: dict, request: Request) -> str:
 
 def mcp_client(url: str, headers: dict[str, str]) -> Client:
     """Client for an MCP server being registered. Tests swap this for an in-memory one."""
-    return Client(StreamableHttpTransport(url, headers=headers), timeout=15)
+    return Client(specs.mcp_transport(url, headers), timeout=15)
 
 
 async def _tools_from_mcp_server(url: str, headers: dict[str, str]) -> dict:
@@ -434,10 +433,13 @@ async def test_provider(request: Request):
         results = await _test_mcp_server(state, p)
         return JSONResponse({"provider": p["id"], "results": results, "ok": all(r["ok"] for r in results)})
     secret = state["credentials"][p["upstream_credential_id"]]["secret"]
-    # Curated providers (like the Bizplay seed) have no per-tool routes; fall back to a known endpoint.
-    routes = [t["route"].split(" ", 1)[1] for t in p["tools"].values() if t["kind"] == "read" and t.get("route")]
+    # Probe with one of the API's own GET routes, preferring one without path
+    # parameters; any parameter left is filled with a placeholder, since the
+    # point is the status code, not the record. The curated Bizplay seed stores
+    # no routes, so it falls back to a path its mock API serves.
+    routes = [t["route"].split(" ", 1)[1] for t in p["tools"].values() if t["kind"] == "read" and t.get("route", "").startswith("GET ")]
     probe_path = next((r for r in routes if "{" not in r), routes[0] if routes else "/api/v1/users/emp001")
-    probe_path = probe_path.replace("{user_id}", "emp001").replace("{card_id}", "card-1001")
+    probe_path = re.sub(r"\{[^}]+\}", "1", probe_path)
     results = []
     async with httpx.AsyncClient(base_url=p["base_url"], timeout=8.0) as client:
         # 1. Reachability: any HTTP answer counts. Try common health paths first for a nicer status.

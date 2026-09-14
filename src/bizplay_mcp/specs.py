@@ -15,7 +15,19 @@ import re
 from typing import Any
 
 import httpx2
+from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.server.providers.openapi import OpenAPIProvider
+
+
+def mcp_transport(url: str, headers: dict[str, str]) -> StreamableHttpTransport | SSETransport:
+    """A client transport for whatever remote MCP server the user registered.
+
+    Streamable HTTP is the current standard; servers still on the older SSE
+    transport conventionally end their URL in /sse.
+    """
+    if url.rstrip("/").lower().endswith("/sse"):
+        return SSETransport(url, headers=headers)
+    return StreamableHttpTransport(url, headers=headers)
 
 # A read verb at the start of the name or after a prefix: getAllCorps, workflow_list_documents.
 READ_VERBS = re.compile(r"(^|_)(get|list|search|find|read|describe|fetch|show|query|count|health|check|lookup)", re.I)

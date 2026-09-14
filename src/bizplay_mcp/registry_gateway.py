@@ -37,7 +37,6 @@ from typing import Any, Callable
 
 import httpx2
 from fastmcp import FastMCP
-from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -233,7 +232,7 @@ class ProviderRegistry:
             if self.mcp_client_factory:
                 factory = lambda: self.mcp_client_factory(provider)  # noqa: E731
             else:
-                factory = lambda: ProxyClient(StreamableHttpTransport(provider["base_url"], headers=headers))  # noqa: E731
+                factory = lambda: ProxyClient(specs.mcp_transport(provider["base_url"], headers))  # noqa: E731
             self.gateway.add_provider(ProxyProvider(factory), namespace=ns)
         else:
             # Older registrations stored raw operationIds; serve what FastMCP names.

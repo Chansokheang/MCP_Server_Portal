@@ -167,6 +167,33 @@ async def test_old_registrations_with_raw_operation_ids_are_healed(admin, corp, 
     assert r.structured_content["url"] == "/files/t1"
 
 
+def test_remote_mcp_transport_follows_the_url():
+    from fastmcp.client.transports import SSETransport, StreamableHttpTransport
+    assert isinstance(specs.mcp_transport("https://x.example.com/mcp", {}), StreamableHttpTransport)
+    assert isinstance(specs.mcp_transport("https://x.example.com/sse", {}), SSETransport)
+
+
+async def test_connection_test_probes_any_spec_without_bizplay_assumptions(admin, monkeypatch):
+    """A spec whose only GET has a path parameter is probed with a placeholder, not a Bizplay id."""
+    seen = []
+    real_client = httpx.AsyncClient
+
+    def fake_client(*args, **kwargs):
+        async def handler(request):
+            seen.append(request.url.path)
+            return httpx.Response(200, json={})
+        return real_client(*args, **{**kwargs, "transport": httpx.MockTransport(handler)})
+
+    monkeypatch.setattr("portal.app.httpx.AsyncClient", fake_client)
+    spec = {"openapi": "3.0.3", "info": {"title": "T", "version": "1"},
+            "paths": {"/v2/tenants/{tenant_id}/items/{item_id}": {"get": {"operationId": "getItem", "responses": {"200": {"description": "ok"}},
+                      "parameters": [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}} for n in ("tenant_id", "item_id")]}}}}
+    pid = (await admin.post("/api/registry", json={"name": "Tenant API", "base_url": "http://t.test", "spec": spec, "auth_mode": "open"})).json()["id"]
+    r = await admin.post(f"/api/registry/{pid}/test")
+    assert r.json()["ok"], r.text
+    assert "/v2/tenants/1/items/1" in seen
+
+
 def test_reconcile_is_a_no_op_for_current_tables():
     provider = {"spec": SPEC, "tools": specs.tools_from_spec(SPEC)}
     assert specs.reconcile_tool_names(provider) == []
