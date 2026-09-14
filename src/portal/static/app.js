@@ -252,6 +252,7 @@ pages.registry = async () => {
           <div class="card-actions">
             <button class="btn small" data-act="detail" data-id="${esc(p.id)}"><i class="ph ph-info"></i> View details</button>
             <button class="btn small solid" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> How to use it</button>
+            ${p.has_spec || p.kind === "mcp" ? `<button class="btn small" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy as MCP server"}</button>` : ""}
           </div>
         </div>`).join("")}</div>`
       : `<div class="card">${emptyState("plugs-connected", "No APIs here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</div>`}
@@ -264,8 +265,10 @@ pages.registry = async () => {
     try {
       if (act === "detail") { setHash("provider", { p: id }); return; }
       if (act === "usage") { setHash("provider", { p: id, c: "claude-desktop" }); return; }
-      await api("POST", `/api/registry/${id}/${act}`);
-      toast(act === "publish" ? "Published" : "Unpublished", `${id} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`);
+      const r = await api("POST", `/api/registry/${id}/${act}`);
+      if (act === "deploy") { toast("Deployed as MCP server", `${r.name} now answers at ${r.standalone_url}`, 6000); setHash("provider", { p: id, via: "standalone" }); return; }
+      if (act === "undeploy") { toast("Undeployed", `${r.standalone_url} now returns 404; the shared gateway still serves it`, 5000); }
+      else toast(act === "publish" ? "Published" : "Unpublished", `${id} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`);
       pages.registry();
     } catch (err) { toast("Action failed", err.message, 4500); }
   });
