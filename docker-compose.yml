@@ -5,9 +5,10 @@
 # Published ports default to the 9010 to 9020 range. Override any of them, and
 # the public host name, in a .env file next to this one (see .env.example).
 #
-#   portal            http://HOST:9012
+#   portal            http://HOST:9012          also serves the registry gateway at
+#                                               /mcp and /mcp/<provider> on this origin
 #   curated gateway   http://HOST:9010/mcp
-#   registry gateway  http://HOST:9011/mcp
+#   registry gateway  http://HOST:9011/mcp      same gateway on its own port
 #   mock Bizplay API  http://HOST:9013   (internal name: legacy-api)
 #
 # Containers always listen on their fixed internal ports; only the published
@@ -47,6 +48,8 @@ services:
 
   portal:
     <<: *app
+    # One origin for the UI and the MCP endpoints: put a TLS proxy in front of
+    # this port and https://your-host/mcp is a stable connector URL.
     command: ["bizplay-portal", "--host", "0.0.0.0", "--port", "18090"]
     environment:
       <<: *public-env

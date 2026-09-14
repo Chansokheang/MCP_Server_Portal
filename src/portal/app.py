@@ -4,6 +4,10 @@ Every /api/* endpoint except /api/login requires `Authorization: Bearer
 <session token>`, mirroring the rule enforced on the Bizplay API and on
 the MCP gateway.
 
+The portal process also serves the registry gateway on its own origin
+(/mcp and /mcp/<provider>), so one public host name covers both the UI and
+the endpoints agents connect to.
+
 Run:
     uv run bizplay-portal             # http://127.0.0.1:18090
 """
@@ -19,6 +23,8 @@ import time
 from pathlib import Path
 
 import httpx
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -27,7 +33,8 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from bizplay_mcp import audit, policy_store
+from bizplay_mcp import audit, policy_store, specs
+from bizplay_mcp.registry_gateway import build_registry_asgi
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -114,8 +121,13 @@ async def config(request: Request):
         "project_dir": os.environ.get("BIZPLAY_PROJECT_DIR", str(PROJECT_ROOT)),
         "gateway_url": policy_store.public_url("curated", request.url.hostname),
         "registry_url": policy_store.public_url("registry", request.url.hostname),
+        # The same registry gateway, served by this portal on the address the browser used.
+        "portal_mcp_url": _origin(request) + "/mcp",
         # What the register dialog prefills; the person registering can change it.
-        "default_mcp_url": _default_endpoint(policy_store.load(), request.url.hostname),
+        # The UI prefers the browser's own origin over the server-derived one, since
+        # a proxy in front may not forward the host name it was reached on.
+        "default_mcp_url": _default_endpoint(policy_store.load(), request),
+        "public_mcp_url": policy_store.load()["security"].get("public_mcp_url", "").strip(),
         # When false, the gateways accept anonymous HTTP callers (demo only).
         "require_agent_token": bool(policy_store.load()["security"]["require_gateway_bearer"]),
     })
@@ -172,7 +184,10 @@ async def overview(request: Request):
 def _public_provider(p: dict) -> dict:
     out = {k: v for k, v in p.items() if k not in ("tools", "spec")}
     out.setdefault("auth_mode", "bearer")
+    out.setdefault("kind", "openapi")
+    out.setdefault("standalone", False)
     out["has_spec"] = bool(p.get("spec"))
+    out["standalone_url"] = policy_store.standalone_url(p)
     out["tool_count"] = len(p["tools"])
     out["tools_enabled"] = sum(t["enabled"] for t in p["tools"].values())
     return out
@@ -183,13 +198,34 @@ async def list_registry(request: Request):
     return JSONResponse({"items": [_public_provider(p) for p in state["providers"].values()]})
 
 
-def _default_endpoint(state: dict, host: str | None) -> str:
+def _origin(request: Request) -> str:
+    """The address the browser reached this portal on, as seen through any proxy."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc)).split(",")[0].strip()
+    return f"{scheme}://{host}"
+
+
+def _default_endpoint(state: dict, request: Request) -> str:
     """The endpoint to offer when registering, which the caller may replace.
 
-    The public address set on the Security page wins; otherwise this server's
-    own address. It is only a prefill: whatever the caller sends is used as is.
+    The public address set on the Security page wins; otherwise the gateway
+    this portal serves on its own origin, which is reachable wherever the
+    portal is. It is only a prefill: whatever the caller sends is used as is.
     """
-    return state["security"].get("public_mcp_url", "").strip() or policy_store.public_url("registry", host)
+    return state["security"].get("public_mcp_url", "").strip() or _origin(request) + "/mcp"
+
+
+def mcp_client(url: str, headers: dict[str, str]) -> Client:
+    """Client for an MCP server being registered. Tests swap this for an in-memory one."""
+    return Client(StreamableHttpTransport(url, headers=headers), timeout=15)
+
+
+async def _tools_from_mcp_server(url: str, headers: dict[str, str]) -> dict:
+    try:
+        async with mcp_client(url, headers) as c:
+            return specs.tools_from_mcp(await c.list_tools())
+    except Exception as exc:  # noqa: BLE001 - any transport or protocol failure reads the same to the caller
+        raise ApiError(502, f"could not list tools from the MCP server at {url}: {str(exc)[:160]}") from None
 
 
 def _normalize_base_url(base_url: str, spec: dict) -> tuple[str, str]:
@@ -208,36 +244,15 @@ def _normalize_base_url(base_url: str, spec: dict) -> tuple[str, str]:
     return base_url, ""
 
 
-def _tools_from_spec(spec: dict) -> dict:
-    tools = {}
-    for path, ops in spec.get("paths", {}).items():
-        for method, op in ops.items():
-            if method.lower() not in ("get", "post", "put", "patch", "delete"):
-                continue
-            name = op.get("operationId") or re.sub(r"[^a-z0-9]+", "_", f"{method}_{path}".lower()).strip("_")
-            kind = "read" if method.lower() == "get" else "write"
-            # Reads are on, writes and deletes are off until someone chooses them.
-            tools[name] = {"kind": kind, "enabled": kind == "read", "roles": ["employee", "manager"],
-                           "confirm": kind == "write", "summary": op.get("summary", ""),
-                           "route": f"{method.upper()} {path}"}
-    return tools
-
-
 async def register_provider(request: Request):
     body = await request.json()
     name = (body.get("name") or "").strip()
     base_url = (body.get("base_url") or "").strip().rstrip("/")
     if not name or not base_url.startswith("http"):
         raise ApiError(400, "name and a valid base_url are required")
-    spec = body.get("spec")
-    if isinstance(spec, str):
-        try:
-            spec = json.loads(spec)
-        except json.JSONDecodeError:
-            raise ApiError(400, "spec must be valid OpenAPI JSON") from None
-    if not isinstance(spec, dict) or "paths" not in spec:
-        raise ApiError(400, "spec must be an OpenAPI document with 'paths'")
-    base_url, base_note = _normalize_base_url(base_url, spec)
+    kind = body.get("kind") or "openapi"
+    if kind not in policy_store.KINDS:
+        raise ApiError(400, f"kind must be one of {', '.join(policy_store.KINDS)}")
     # Whatever endpoint the caller gives is used verbatim; the default is a prefill.
     mcp_url = (body.get("mcp_url") or "").strip()
     if mcp_url and not mcp_url.startswith("http"):
@@ -248,24 +263,49 @@ async def register_provider(request: Request):
     allowlist = (body.get("allowlist") or "").strip()
     if auth_mode == "network" and not allowlist:
         raise ApiError(400, "network mode needs the gateway address the API allows (allowlist)")
+    service_token = (body.get("service_token") or "").strip()
+
+    base_note = ""
+    spec = None
+    if kind == "mcp":
+        # An MCP server that already exists: its own tool list is the policy table.
+        headers = {"Authorization": f"Bearer {service_token}"} if auth_mode == "bearer" and service_token else {}
+        tools = await _tools_from_mcp_server(base_url, headers)
+        spec_source = "MCP server"
+    else:
+        spec = body.get("spec")
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except json.JSONDecodeError:
+                raise ApiError(400, "spec must be valid OpenAPI JSON") from None
+        if not isinstance(spec, dict) or "paths" not in spec:
+            raise ApiError(400, "spec must be an OpenAPI document with 'paths'")
+        base_url, base_note = _normalize_base_url(base_url, spec)
+        try:
+            tools = specs.tools_from_spec(spec)
+        except ValueError as exc:
+            raise ApiError(400, f"spec could not be parsed: {str(exc)[:160]}") from None
+        spec_source = body.get("spec_source") or "uploaded"
+
     state = policy_store.load()
-    mcp_url = mcp_url or _default_endpoint(state, request.url.hostname)
+    mcp_url = mcp_url or _default_endpoint(state, request)
     pid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "provider"
     if pid in state["providers"]:
         pid = f"{pid}-{secrets.token_hex(2)}"
     cred_id = f"cred_{pid}_service"
     state["credentials"][cred_id] = {
         "id": cred_id, "provider_id": pid, "label": f"Gateway -> {name} service token", "type": "bearer",
-        "secret": body.get("service_token") or "", "created_at": _now_iso(), "rotated_at": None,
+        "secret": service_token, "created_at": _now_iso(), "rotated_at": None,
     }
     state["providers"][pid] = {
-        "id": pid, "name": name, "owner": request.state.user, "base_url": base_url,
-        "spec_source": body.get("spec_source") or "uploaded", "spec": spec,
-        "mcp_url": mcp_url,
+        "id": pid, "name": name, "owner": request.state.user, "kind": kind, "base_url": base_url,
+        "spec_source": spec_source, "spec": spec,
+        "mcp_url": mcp_url, "standalone": False,
         "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},
-        "tools": _tools_from_spec(spec), "created_at": _now_iso(),
+        "tools": tools, "created_at": _now_iso(),
     }
     policy_store.save(state)
     return JSONResponse({**_public_provider(state["providers"][pid]), "note": base_note}, status_code=201)
@@ -284,6 +324,12 @@ async def update_provider(request: Request):
         if not base_url.startswith("http"):
             raise ApiError(400, "base_url must start with http")
         p["base_url"], note = _normalize_base_url(base_url, p.get("spec") or {})
+        # A moved MCP server may expose a different tool list; refresh it, keeping policy.
+        if p.get("kind") == "mcp":
+            fresh = await _tools_from_mcp_server(p["base_url"], _upstream_headers(state, p))
+            p["tools"] = {n: {**row, **{k: p["tools"][n][k] for k in ("enabled", "roles", "confirm")}} if n in p["tools"] else row
+                          for n, row in fresh.items()}
+            note = f"Tool list refreshed: {len(fresh)} tool(s)."
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
         # One gateway, one public address: remember it for the next registration.
@@ -315,18 +361,33 @@ def _get_provider(state: dict, pid: str) -> dict:
         raise ApiError(404, f"unknown provider '{pid}'") from None
 
 
+def _upstream_headers(state: dict, p: dict) -> dict[str, str]:
+    secret = state["credentials"].get(p.get("upstream_credential_id", ""), {}).get("secret", "")
+    return {"Authorization": f"Bearer {secret}"} if p.get("auth_mode", "bearer") == "bearer" and secret else {}
+
+
 async def set_provider_status(request: Request):
+    """publish / unpublish on the shared gateway; deploy / undeploy the standalone endpoint."""
     state = policy_store.load()
     p = _get_provider(state, request.path_params["pid"])
     action = request.path_params["action"]
-    if action not in ("publish", "unpublish"):
-        raise ApiError(400, "action must be publish or unpublish")
+    if action not in ("publish", "unpublish", "deploy", "undeploy"):
+        raise ApiError(400, "action must be publish, unpublish, deploy or undeploy")
     mode = p.get("auth_mode", "bearer")
-    if action == "publish" and mode == "bearer" and not state["credentials"][p["upstream_credential_id"]]["secret"]:
+    if action in ("publish", "deploy") and mode == "bearer" and not state["credentials"][p["upstream_credential_id"]]["secret"]:
         raise ApiError(409, "bearer mode: add an upstream service token before publishing")
-    if action == "publish" and mode == "network" and not p.get("allowlist"):
+    if action in ("publish", "deploy") and mode == "network" and not p.get("allowlist"):
         raise ApiError(409, "network mode: record the allowlisted gateway address before publishing")
-    p["status"] = "published" if action == "publish" else "draft"
+    if action == "deploy" and not (p.get("spec") or p.get("kind") == "mcp"):
+        raise ApiError(409, "the curated Bizplay provider is already its own server; deploy applies to registered APIs")
+    if action in ("publish", "unpublish"):
+        p["status"] = "published" if action == "publish" else "draft"
+    else:
+        # A standalone endpoint is only served for a published provider, so
+        # deploying also publishes; undeploying leaves the shared endpoint alone.
+        p["standalone"] = action == "deploy"
+        if action == "deploy":
+            p["status"] = "published"
     policy_store.save(state)
     return JSONResponse(_public_provider(p))
 
@@ -343,10 +404,35 @@ async def delete_provider(request: Request):
     return JSONResponse({"ok": True})
 
 
+async def _test_mcp_server(state: dict, p: dict) -> list[dict]:
+    """An MCP backend passes when it completes the handshake and lists its tools."""
+    results = []
+    try:
+        async with mcp_client(p["base_url"], _upstream_headers(state, p)) as c:  # entering = initialize handshake
+            results.append({"check": "MCP server answers initialize", "path": p["base_url"], "status": "ok", "ok": True})
+            listed = await c.list_tools()
+            known = set(p["tools"])
+            new = [t.name for t in listed if t.name not in known]
+            results.append({"check": "Tools listed", "path": "tools/list", "status": len(listed), "ok": bool(listed),
+                            "note": (f"{len(new)} tool(s) not in the policy table yet, save Edit connection to refresh: " + ", ".join(new[:5]))
+                            if new else f"{len(listed)} tool(s), all in the policy table"})
+    except Exception as exc:  # noqa: BLE001
+        results.append({"check": "MCP server answers initialize", "path": p["base_url"], "status": None, "ok": False,
+                        "error": str(exc)[:160]})
+    mode = p.get("auth_mode", "bearer")
+    results.append({"check": "Upstream credential", "path": p["base_url"], "status": None, "ok": True,
+                    "note": "the stored service token is sent as a bearer header" if mode == "bearer"
+                    else f"none sent in {mode} mode"})
+    return results
+
+
 async def test_provider(request: Request):
     """Probe the provider: /health must be open, /api/* must answer 401 without a token."""
     state = policy_store.load()
     p = _get_provider(state, request.path_params["pid"])
+    if p.get("kind") == "mcp":
+        results = await _test_mcp_server(state, p)
+        return JSONResponse({"provider": p["id"], "results": results, "ok": all(r["ok"] for r in results)})
     secret = state["credentials"][p["upstream_credential_id"]]["secret"]
     # Curated providers (like the Bizplay seed) have no per-tool routes; fall back to a known endpoint.
     routes = [t["route"].split(" ", 1)[1] for t in p["tools"].values() if t["kind"] == "read" and t.get("route")]
@@ -558,6 +644,33 @@ app = Starlette(
 )
 
 
+class PortalWithGateway:
+    """One process, one origin: the portal UI and API, plus the registry gateway under /mcp.
+
+    The gateway is called directly rather than mounted, so its streaming
+    responses never pass through the portal's request middleware, and its
+    lifespan (the MCP session manager) is the process lifespan.
+    """
+
+    def __init__(self, portal: Starlette, gateway) -> None:
+        self.portal = portal
+        self.gateway = gateway
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "lifespan":
+            return await self.gateway(scope, receive, send)
+        if scope["type"] == "http" and (scope["path"] == "/mcp" or scope["path"].startswith("/mcp/")):
+            return await self.gateway(scope, receive, send)
+        return await self.portal(scope, receive, send)
+
+
+def create_app(gateway=None) -> PortalWithGateway:
+    """The deployable app. `gateway` may be a FastMCP server (wrapped here) or an ASGI app."""
+    if gateway is None or not callable(gateway):
+        gateway = build_registry_asgi(gateway)
+    return PortalWithGateway(app, gateway)
+
+
 def main() -> None:
     import uvicorn
 
@@ -565,7 +678,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18090)
     args = parser.parse_args()
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(create_app(), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

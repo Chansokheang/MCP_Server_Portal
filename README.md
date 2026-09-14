@@ -47,7 +47,7 @@ Open http://127.0.0.1:18090 and sign in with `admin@bizplay.co.kr` / `admin1234`
 | Page | What it does |
 |---|---|
 | Overview | Request-flow diagram, security checklist score, recent gateway calls |
-| MCP Registry | Register an API from an OpenAPI spec, publish/unpublish, **Test connection** (proves `/api/*` answers 401 without a bearer token) |
+| MCP Registry | Register a REST API from its OpenAPI spec or an existing MCP server by URL, publish/unpublish, **Deploy as MCP server**, **Test connection** |
 | Access Control | Per tool: enabled, allowed roles, confirm-before-call. Applied by the gateway on the next call |
 | Agent Tokens | Issue a bearer token bound to one Bizplay user and role; shown once; revoke takes effect immediately |
 | Security | Bearer requirements, default token lifetime, identity mapping, upstream credential rotation |
@@ -66,14 +66,28 @@ scopes results to the caller's company: any argument named `corpNo` (or similar)
 must equal the token's company, and records belonging to other companies are
 removed from responses.
 
-### Registry gateway
+### Registry gateway: two kinds of backend
 
-`bizplay_mcp/registry_gateway.py` serves every published provider from the spec
-stored in the portal, with tool names prefixed by the provider id
-(`bizplay_classifier_getAllCorps`). Publishing a new API adds its tools on the
-next request, with no restart. Unpublishing hides and refuses the tools, though
-they stay loaded until the next restart. Changing the agent token requirement
-does need one, because that is fixed when the server starts.
+`bizplay_mcp/registry_gateway.py` serves every published provider. A provider
+is one of:
+
+| Kind | You give the portal | What the gateway does |
+|---|---|---|
+| REST API (`openapi`) | Base URL plus the OpenAPI spec | FastMCP generates one tool per endpoint (`OpenAPIProvider`) |
+| Existing MCP server (`mcp`) | The server's MCP URL | Reads its tool list once, then proxies every call (`ProxyProvider`) |
+
+Both get the same governance: agent tokens, per-tool policy, company scoping,
+audit. On the shared endpoint tool names are prefixed by the provider id
+(`bizplay_classifier_getAllCorps`, `flow_list_tasks`). Publishing adds the
+tools on the next request, with no restart. Unpublishing hides and refuses them,
+though they stay loaded until the next restart. Changing the agent token
+requirement does need one, because that is fixed when the server starts.
+
+The tool names stored by the portal are the ones FastMCP generates, which differ
+from raw operationIds in some specs (FastAPI's
+`download_url_api_v1_templates__template_id__download_get` becomes
+`download_url_api_v1_templates`). Older registrations that stored raw ids are
+renamed on load, policy intact.
 
 ```bash
 uv run --no-sync python -m bizplay_mcp.registry_gateway --transport http --port 8002
@@ -81,6 +95,27 @@ uv run --no-sync python -m bizplay_mcp.registry_gateway --transport http --port 
 
 Claude Desktop entry `bizplay-registry` runs the same server over stdio with the
 identity taken from `BIZPLAY_USER_ID`, `BIZPLAY_ROLE`, and `BIZPLAY_COMPANY`.
+
+### Deploy one API as its own MCP server
+
+Every gateway endpoint serves two shapes:
+
+```
+<endpoint>/mcp            every published provider, tools prefixed by provider id
+<endpoint>/mcp/<id>       one provider on its own, plain tool names
+```
+
+**Deploy as MCP server** on a provider's page switches the second one on (and
+publishes the provider). An agent that adds `/mcp/workflow` sees only that
+product, with names like `list_templates`, the way a vendor's own MCP app
+appears in claude.ai or ChatGPT. Undeploy returns 404 there immediately; the
+shared endpoint is unaffected. It is the same process, so nothing new is
+started and the same tokens, policy, company scoping and audit apply. The
+detail page writes its setup instructions for whichever endpoint you pick.
+
+The portal process serves this gateway too, at its own origin, so one host name
+covers the UI, `/mcp` and `/mcp/<id>`. That is the endpoint the register dialog
+prefills unless a public address is set on the Security page.
 
 ### Bearer tokens everywhere
 
@@ -108,6 +143,8 @@ src/bizplay_mcp/
   adapters.py       Only place that knows the existing endpoints (HTTP client, sends the service token)
   auth.py           Gateway bearer verification against portal-issued agent tokens
   policy_store.py   Shared control-plane state: registry, tokens, per-tool access policy
+  specs.py          Tool tables: exact FastMCP names for a spec, tool list of an MCP server
+  registry_gateway.py  Serves every published provider (OpenAPI or proxied MCP), /mcp and /mcp/<id>
   compliance.py     Korean corporate-card rules (simplified demo values)
   audit.py          JSON Lines audit log of every tool call -> logs/audit.jsonl
   server.py         Option B: curated MCP gateway (auth + policy + audit)
@@ -180,25 +217,31 @@ docker compose --profile tunnel up -d tunnel && docker compose logs tunnel | gre
 The printed `https://...trycloudflare.com` plus `/mcp` is the connector URL. It
 changes every restart and is open to anyone who has it.
 
-**A stable URL.** Point a subdomain at the server and terminate TLS with nginx:
+**A stable URL.** Point a subdomain at the server and terminate TLS with nginx.
+The portal serves the gateway on its own origin, so one `location /` covers the
+UI, `/mcp` and every `/mcp/<id>`:
 
 ```bash
-sudo certbot --nginx -d mcp.example.com
+sudo certbot --nginx -d mcp-portal.example.com
 ```
 
 ```nginx
-location /mcp {
-    proxy_pass http://127.0.0.1:9011;
+location / {
+    proxy_pass http://127.0.0.1:9015;      # the portal's published port
     proxy_http_version 1.1;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Connection '';
     proxy_buffering off;      # MCP streams responses; buffering makes it hang
     proxy_read_timeout 3600s;
 }
 ```
 
-Then set the API's endpoint to the HTTPS URL with **Edit connection**, and add it
-in claude.ai under Settings, Connectors, Add custom connector.
+`https://mcp-portal.example.com/mcp` is then the connector URL, and a deployed
+provider is at `https://mcp-portal.example.com/mcp/<id>`. Put the HTTPS address
+in **Public MCP endpoint** on the Security page so new registrations inherit
+it, or set it per API with **Edit connection**, then add it in claude.ai under
+Settings, Connectors, Add custom connector.
 
 ### The one-line shortcut
 
@@ -298,7 +341,7 @@ docker compose up --build
 |---|---|---|---|
 | gateway | 9010 | 8000 | Curated tools, calls `legacy-api` by service name |
 | registry-gateway | 9011 | 8002 | Serves every published API; new ones appear without a restart |
-| portal | 9012 | 18090 | Writes the shared state volume |
+| portal | 9012 | 18090 | UI and API, plus the same registry gateway at `/mcp` and `/mcp/<id>` on its own origin |
 | legacy-api | 9013 | 18080 | Mock of the existing Bizplay API; drop the mapping in production |
 
 ### Changing ports

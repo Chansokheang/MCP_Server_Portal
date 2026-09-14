@@ -204,13 +204,16 @@ async def test_edit_connection(admin):
 
 
 async def test_public_url_follows_the_published_port(admin, monkeypatch):
-    """Agents get the published address, not the container's internal port."""
+    """The separate gateways report their published address, not the container's internal port."""
     monkeypatch.setenv("BIZPLAY_PUBLIC_REGISTRY_URL", "http://mcp.example.com:9011/mcp")
     monkeypatch.setenv("BIZPLAY_PUBLIC_GATEWAY_URL", "http://mcp.example.com:9010/mcp")
+    c = (await admin.get("/api/config")).json()
+    assert c["registry_url"] == "http://mcp.example.com:9011/mcp"
+    assert policy_store.public_url("curated") == "http://mcp.example.com:9010/mcp"
+    # The register prefill is the portal's own gateway, which is always reachable where the portal is.
     r = await admin.post("/api/registry", json={"name": "Ported API", "base_url": "http://x.test",
                                                 "spec": SPEC, "auth_mode": "open"})
-    assert r.json()["mcp_url"] == "http://mcp.example.com:9011/mcp"
-    assert policy_store.public_url("curated") == "http://mcp.example.com:9010/mcp"
+    assert r.json()["mcp_url"] == "http://portal.test/mcp"
 
     monkeypatch.delenv("BIZPLAY_PUBLIC_REGISTRY_URL")
     assert policy_store.public_url("registry") == "http://127.0.0.1:8002/mcp"
@@ -219,9 +222,8 @@ async def test_public_url_follows_the_published_port(admin, monkeypatch):
 async def test_configured_localhost_url_is_rewritten_to_the_browsing_host(admin, monkeypatch):
     """A deployment that left the URL at 127.0.0.1 would hand agents a dead address."""
     monkeypatch.setenv("BIZPLAY_PUBLIC_REGISTRY_URL", "http://127.0.0.1:9014/mcp")
-    r = await admin.post("/api/registry", json={"name": "Hosted API", "base_url": "http://x.test",
-                                                "spec": SPEC, "auth_mode": "open"})
-    assert r.json()["mcp_url"] == "http://portal.test:9014/mcp", "port kept, host corrected"
+    c = (await admin.get("/api/config")).json()
+    assert c["registry_url"] == "http://portal.test:9014/mcp", "port kept, host corrected"
     # Reached on the server itself, the configured value stands.
     assert policy_store.public_url("registry", "127.0.0.1") == "http://127.0.0.1:9014/mcp"
 

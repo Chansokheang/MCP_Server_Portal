@@ -290,6 +290,23 @@ pre { background: var(--tile); color: var(--ink); padding: 12px 14px; border-rad
 .stat:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 tbody tr td { transition: background .15s ease; }
 
+/* ---------- segmented choice (backend kind, connect via) ---------- */
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg-opt { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; padding: 10px 12px; border-radius: var(--r-tile); border: 1px solid var(--line-strong); background: var(--surface); cursor: pointer; font-size: 12.5px; transition: background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.seg-opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+.seg-opt i { font-size: 18px; color: var(--ink-3); margin-top: 1px; }
+.seg-opt > span { display: grid; gap: 2px; min-width: 0; }
+.seg-opt strong { font-weight: 500; }
+.seg-opt > span > span { color: var(--ink-3); font-size: 11.5px; }
+.seg-opt:hover { background: var(--tile); }
+.seg-opt:has(input:checked) { border-color: var(--green); background: var(--green-soft); box-shadow: 0 0 0 1px var(--green) inset; }
+.seg-opt:has(input:checked) i, .seg-opt:has(input:checked) strong { color: var(--green-ink); }
+.seg-opt:has(input:focus-visible) { outline: 2px solid var(--green); outline-offset: 2px; }
+.card.deploy { border-style: dashed; }
+.card.deploy.on { border-style: solid; border-color: var(--green); }
+.logo i { font-size: 14px; }
+@media (max-width: 760px) { .seg { grid-template-columns: 1fr; } }
+
 /* ---------- responsive & motion ---------- */
 @media (max-width: 1100px) { .stats { grid-template-columns: 1fr 1fr; } .two { grid-template-columns: 1fr; } .flow { grid-template-columns: 1fr; } .form-2 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {

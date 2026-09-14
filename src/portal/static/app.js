@@ -92,6 +92,8 @@ const tile = (icon, k, v, mono = false) => `<div class="tile"><span class="k"><i
 const LOGO_COLORS = ["green", "lilac", "amber", "dark", "red"];
 const logo = (name, i = 0) => `<span class="logo ${LOGO_COLORS[i % LOGO_COLORS.length]}">${esc(initials(name))}</span>`;
 const authChip = (m) => ({ bearer: chip("lilac", "Bearer", "key"), network: chip("amber", "Network", "shield-check"), open: chip("red", "Open", "warning") }[m] || chip("lilac", "Bearer", "key"));
+const kindChip = (k) => k === "mcp" ? chip("green", "MCP server", "plugs-connected") : chip("", "REST API", "cloud");
+const standaloneChip = (p) => p.standalone ? chip("green", "Deployed", "rocket-launch") : "";
 const statusChip = (s) => s === "published" ? chip("green", "Published", "check") : chip("", "Draft", "pencil-simple");
 const outcomeChip = (o) => ({ ok: chip("green", "ok"), denied: chip("red", "denied"), error: chip("amber", "error") }[o] || chip("", o));
 const passChip = (ok) => ok ? chip("green", "pass", "check") : chip("red", "fail", "x");
@@ -192,9 +194,9 @@ pages.overview = async () => {
           <div class="flow">
             <div class="node"><strong>AI agent</strong><span class="muted">Claude, Copilot, Agentforce</span></div><span class="arrow">agent token</span>
             <div class="node hl"><strong>MCP Gateway</strong>auth, policy, company scope, audit</div><span class="arrow">service token</span>
-            <div class="node"><strong>Bizplay API</strong><span class="muted">unchanged</span></div>
+            <div class="node"><strong>REST API or MCP server</strong><span class="muted">unchanged</span></div>
           </div>
-          <p class="muted small" style="margin:4px 0 0">Two separate tokens. One identifies the end user to the gateway, one identifies the gateway to the API. Neither reaches the model.</p>
+          <p class="muted small" style="margin:4px 0 0">Two separate tokens. One identifies the end user to the gateway, one identifies the gateway to the backend. Neither reaches the model. A backend is either a REST API the gateway adapts, or an MCP server it proxies; any registered API can also be deployed as an MCP server of its own.</p>
         </div>
         <h2 class="section-title" style="margin-top:22px">Security checklist</h2>
         <div class="checklist">${d.checklist.map((c) => `<div class="check-item ${c.ok ? "ok" : "bad"}"><span class="mark"><i class="ph ${c.ok ? "ph-check" : "ph-x"}"></i></span><div><strong>${esc(c.label)}</strong><div class="muted small">${esc(c.detail)}</div></div></div>`).join("")}</div>
@@ -226,18 +228,18 @@ pages.registry = async () => {
       </div>
       ${items.length ? `<div class="cards">${items.map((p, i) => `
         <div class="card lift">
-          <div class="card-head"><span class="card-brand">${logo(p.name, i)} ${esc(p.name)}</span>${authChip(p.auth_mode)}</div>
+          <div class="card-head"><span class="card-brand">${logo(p.name, i)} ${esc(p.name)}</span><span style="display:flex;gap:6px;flex-wrap:wrap">${standaloneChip(p)}${kindChip(p.kind)}${authChip(p.auth_mode)}</span></div>
           <div class="tiles">${tile("plug", "Tools", `${p.tools_enabled} of ${p.tool_count} enabled`)}${tile("calendar-blank", "Registered", fmtDate(p.created_at))}</div>
           <h3 class="card-title">${esc(p.base_url.replace(/^https?:\/\//, ""))}</h3>
-          <p class="card-desc">MCP endpoint ${esc(p.mcp_url)}${p.tool_prefix ? `, tools named ${esc(p.tool_prefix)}*` : ""}. Spec from ${esc(p.spec_source)}. Owner ${esc(p.owner)}.</p>
+          <p class="card-desc">${p.standalone ? `Own MCP server at ${esc(p.standalone_url)}. Also on the gateway ${esc(p.mcp_url)}` : `On the gateway ${esc(p.mcp_url)}`}${p.tool_prefix ? `, tools named ${esc(p.tool_prefix)}*` : ""}. ${p.kind === "mcp" ? "Tools proxied from the MCP server" : `Spec from ${esc(p.spec_source)}`}. Owner ${esc(p.owner)}.</p>
           <div class="card-actions">
             <button class="btn small" data-act="detail" data-id="${esc(p.id)}"><i class="ph ph-info"></i> View details</button>
             <button class="btn small solid" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> How to use it</button>
           </div>
         </div>`).join("")}</div>`
-      : `<div class="card">${emptyState("plugs-connected", "No APIs here", "Register one with an OpenAPI spec. The API itself is not changed.")}</div>`}
+      : `<div class="card">${emptyState("plugs-connected", "No APIs here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</div>`}
     </div>
-    <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> makes the MCP endpoint reachable by agents and enforces this portal's tool policy. The gateway picks up a newly published API on the next request, so no restart is needed. Listing in public directories (official MCP Registry, Claude, Copilot Studio, Agentforce) is a separate step.</span></div>`;
+    <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> puts a backend on the shared gateway endpoint, with this portal's tool policy enforced. <strong>Deployed</strong> additionally gives it an MCP server of its own at <span class="mono">/mcp/&lt;id&gt;</span>, with plain tool names, for teams that want one product per connector. Both take effect on the next request, no restart. Listing in public directories (official MCP Registry, Claude, Copilot Studio, Agentforce) is a separate step.</span></div>`;
 
   $("#btn-register").onclick = registerDialog;
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
@@ -253,29 +255,45 @@ pages.registry = async () => {
 };
 
 async function registerDialog() {
-  modal(`<h2><i class="ph ph-plus-circle"></i> Register an API</h2>
+  modal(`<h2><i class="ph ph-plus-circle"></i> Register a backend</h2>
     <form id="reg-form" class="form">
+      <div class="seg" id="reg-kind" role="radiogroup" aria-label="Backend type">
+        <label class="seg-opt"><input type="radio" name="kind" value="openapi" checked><i class="ph ph-cloud"></i><span><strong>REST API</strong><span>Paste its OpenAPI spec. The gateway generates the tools.</span></span></label>
+        <label class="seg-opt"><input type="radio" name="kind" value="mcp"><i class="ph ph-plugs-connected"></i><span><strong>Existing MCP server</strong><span>Give its URL. The gateway proxies its tools.</span></span></label>
+      </div>
       <label class="field">Provider name <input name="name" placeholder="e.g. Bizplay HR API" required></label>
-      <label class="field">Base URL of the existing API <input name="base_url" placeholder="https://api.example.com" required></label>
-      <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(SERVER.default_mcp_url || "")}" placeholder="https://your-host/mcp">
+      <label class="field"><span id="reg-base-label">Base URL of the existing API</span> <input name="base_url" id="reg-base" placeholder="https://api.example.com" required></label>
+      <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(SERVER.public_mcp_url || (location.origin + "/mcp"))}" placeholder="https://your-host/mcp">
         <span class="muted small">Any address that reaches this gateway. Use an HTTPS one for claude.ai and ChatGPT.</span></label>
-      <label class="field">How is the API protected?
+      <label class="field"><span id="reg-mode-label">How is the API protected?</span>
         <select name="auth_mode" id="reg-mode">
-          <option value="bearer">Bearer token: the API rejects anonymous calls (recommended)</option>
+          <option value="bearer">Bearer token: it rejects anonymous calls (recommended)</option>
           <option value="network">Network-isolated: no token, only the gateway's address can reach it</option>
           <option value="open">Open: anyone can call it (demo data only, recorded as accepted risk)</option>
         </select></label>
       <label class="field" id="reg-token-field">Service bearer token the gateway will send <input name="service_token" placeholder="issued by the provider (stored, never shown again)"></label>
       <label class="field hidden" id="reg-allowlist-field">Gateway address the API allows <input name="allowlist" placeholder="e.g. 203.0.113.10 or 10.0.0.0/24"></label>
-      <div class="callout warn hidden" id="reg-open-warning"><i class="ph ph-warning"></i><span><strong>Open API.</strong> The gateway still authenticates agents, applies tool policy, and limits results to the caller's company, but anyone who knows the URL can bypass it. The overview will show this as an accepted risk.</span></div>
-      <label class="field">OpenAPI spec (JSON) <textarea name="spec" placeholder='{"openapi":"3.0.3","paths":{...}}' required></textarea></label>
+      <div class="callout warn hidden" id="reg-open-warning"><i class="ph ph-warning"></i><span><strong>Open backend.</strong> The gateway still authenticates agents, applies tool policy, and limits results to the caller's company, but anyone who knows the URL can bypass it. The overview will show this as an accepted risk.</span></div>
+      <label class="field" id="reg-spec-field">OpenAPI spec (JSON) <textarea name="spec" placeholder='{"openapi":"3.0.3","paths":{...}}' required></textarea></label>
+      <div class="callout hidden" id="reg-mcp-note"><i class="ph ph-info"></i><span>The portal connects to the server now and reads its tool list. Tools marked read-only by the server start enabled; the rest start off and can be switched on under Access Control.</span></div>
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <button type="button" class="btn small" id="reg-sample"><i class="ph ph-file-arrow-down"></i> Load Bizplay sample spec</button>
-        <span style="display:flex;gap:8px"><button type="button" class="btn" id="reg-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Register as draft</button></span>
+        <span style="display:flex;gap:8px"><button type="button" class="btn" id="reg-cancel">Cancel</button><button class="btn solid" type="submit" id="reg-submit"><i class="ph ph-check"></i> Register as draft</button></span>
       </div>
       <p class="error" id="reg-error"></p>
     </form>`);
   $("#reg-cancel").onclick = closeModal;
+  const kindOf = () => $("#reg-form [name=kind]:checked").value;
+  $("#reg-kind").onchange = () => {
+    const mcp = kindOf() === "mcp";
+    $("#reg-base-label").textContent = mcp ? "URL of the MCP server" : "Base URL of the existing API";
+    $("#reg-base").placeholder = mcp ? "https://mcp.example.com/mcp" : "https://api.example.com";
+    $("#reg-mode-label").textContent = mcp ? "How is the MCP server protected?" : "How is the API protected?";
+    $("#reg-spec-field").classList.toggle("hidden", mcp);
+    $("#reg-form [name=spec]").required = !mcp;
+    $("#reg-mcp-note").classList.toggle("hidden", !mcp);
+    $("#reg-sample").classList.toggle("hidden", mcp);
+  };
   $("#reg-mode").onchange = (e) => {
     const m = e.target.value;
     $("#reg-token-field").classList.toggle("hidden", m !== "bearer");
@@ -290,39 +308,43 @@ async function registerDialog() {
   };
   $("#reg-form").onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    const btn = $("#reg-submit"); btn.disabled = true;
+    if (f.kind === "mcp") { delete f.spec; btn.innerHTML = `<i class="ph ph-circle-notch"></i> Reading tools from the server`; }
     try {
       const p = await api("POST", "/api/registry", { ...f, spec_source: "uploaded" });
-      toast("Registered as draft", `${p.tool_count} tools generated from the spec`);
+      toast("Registered as draft", p.kind === "mcp" ? `${p.tool_count} tools read from the MCP server` : `${p.tool_count} tools generated from the spec`);
       testDialog(p.id);  // prove the connection now, while the details are fresh
-    } catch (err) { $("#reg-error").textContent = err.message; }
+    } catch (err) { $("#reg-error").textContent = err.message; btn.disabled = false; btn.innerHTML = `<i class="ph ph-check"></i> Register as draft`; }
   };
 }
 
 /** Ready-to-paste commands. Issues a token first when the gateway needs one. */
-function commandResult(p, token) {
+function commandResult(p, token, via) {
+  const url = via.url;
   const hdr = token ? ` \\\n  --header "Authorization: Bearer ${token}"` : "";
-  const plainHttp = p.mcp_url.startsWith("http://") && !LOCAL_HOST.test(hostOf(p.mcp_url));
+  const plainHttp = url.startsWith("http://") && !LOCAL_HOST.test(hostOf(url));
   const desktop = `"${p.id}": ` + JSON.stringify({
     command: "npx",
-    args: ["-y", "mcp-remote", p.mcp_url, "--transport", "http-only",
+    args: ["-y", "mcp-remote", url, "--transport", "http-only",
       ...(plainHttp ? ["--allow-http"] : []),
       ...(token ? ["--header", `Authorization: Bearer ${token}`] : [])],
   }, null, 2);
   modal(`<h2><i class="ph ph-terminal-window"></i> Connect to ${esc(p.name)}</h2>
-    ${token ? `<p class="muted">A token was issued for this command. It is shown once, so copy the command now. Revoke it any time on the Agent Tokens page.</p>`
-            : `<p class="muted">This gateway accepts anonymous callers, so no token is needed.</p>`}
+    <p class="muted">${via.standalone ? `Its own MCP server at <span class="mono">${esc(url)}</span>, tool names without a prefix.` : `The shared gateway at <span class="mono">${esc(url)}</span>, tools named <span class="mono">${esc(via.prefix)}*</span>.`}
+    ${token ? `A token was issued for this command. It is shown once, so copy the command now. Revoke it any time on the Agent Tokens page.`
+            : `This gateway accepts anonymous callers, so no token is needed.`}</p>
     <h2 class="section-title" style="margin-top:14px">Claude Code, one line</h2>
-    ${codeBlock("cc-code", `claude mcp add --transport http ${p.id} ${p.mcp_url}${hdr}`)}
+    ${codeBlock("cc-code", `claude mcp add --transport http ${p.id} ${url}${hdr}`)}
     <h2 class="section-title" style="margin-top:16px">Claude Desktop, add under mcpServers</h2>
     ${codeBlock("cc-desktop", desktop, "Needs Node.js. Restart Claude Desktop from the system tray afterwards.")}
     <h2 class="section-title" style="margin-top:16px">Check it from a terminal</h2>
-    ${codeBlock("cc-curl", `curl -s ${p.mcp_url} \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json"${token ? ` \\\n  -H "Authorization: Bearer ${token}"` : ""} \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`)}
+    ${codeBlock("cc-curl", `curl -s ${url} \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json"${token ? ` \\\n  -H "Authorization: Bearer ${token}"` : ""} \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`)}
     <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn solid" id="cc-done">Done</button></div>`);
   $("#cc-done").onclick = () => { closeModal(); pages.provider(); };
 }
 
-async function commandDialog(p) {
-  if (SERVER.require_agent_token === false) return commandResult(p, null);
+async function commandDialog(p, via) {
+  if (SERVER.require_agent_token === false) return commandResult(p, null, via);
   modal(`<h2><i class="ph ph-terminal-window"></i> Connect command</h2>
     <p class="muted">Who should the agent act as? A token is issued for this command.</p>
     <form id="cc-form" class="form">
@@ -340,7 +362,7 @@ async function commandDialog(p) {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
     try {
       const r = await api("POST", "/api/tokens", { ...f, label: `${p.name} connect command`, agent: "Claude Code" });
-      commandResult(p, r.token);
+      commandResult(p, r.token, via);
     } catch (err) { $("#cc-error").textContent = err.message; }
   };
 }
@@ -350,11 +372,11 @@ async function editDialog(p) {
   modal(`<h2><i class="ph ph-pencil-simple"></i> Edit connection</h2>
     <form id="ed-form" class="form">
       <label class="field">Provider name <input name="name" value="${esc(p.name)}"></label>
-      <label class="field">Base URL of the existing API <input name="base_url" value="${esc(p.base_url)}">
-        <span class="muted small">Host only. The paths come from the spec, so a base URL ending in a path the spec also has causes 404.</span></label>
+      <label class="field">${p.kind === "mcp" ? "URL of the MCP server" : "Base URL of the existing API"} <input name="base_url" value="${esc(p.base_url)}">
+        <span class="muted small">${p.kind === "mcp" ? "Saving reconnects and refreshes the tool list; your enable, role and confirm settings are kept." : "Host only. The paths come from the spec, so a base URL ending in a path the spec also has causes 404."}</span></label>
       <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(p.mcp_url)}">
-        <span class="muted small">Use the address reachable from outside this server, not 127.0.0.1.</span></label>
-      <label class="field">How is the API protected?
+        <span class="muted small">Use the address reachable from outside this server, not 127.0.0.1. A deployed server lives at this address plus /${esc(p.id)}.</span></label>
+      <label class="field">How is the ${p.kind === "mcp" ? "MCP server" : "API"} protected?
         <select name="auth_mode" id="ed-mode">
           ${opt("bearer", "Bearer token: the API rejects anonymous calls")}
           ${opt("network", "Network-isolated: no token, only the gateway's address can reach it")}
@@ -534,15 +556,24 @@ function codeBlock(id, text, note) {
 
 const portOf = (url) => (String(url).match(/:(\d+)/) || [, "8002"])[1];
 
+/** Where an agent connects: the shared gateway (prefixed tools) or this provider's own server. */
+function connectVia(p) {
+  const standalone = p.standalone && hashParam("via") === "standalone";
+  return standalone
+    ? { url: p.standalone_url, prefix: "", standalone: true, label: "its own MCP server" }
+    : { url: p.mcp_url, prefix: p.tool_prefix || "", standalone: false, label: "the shared gateway" };
+}
+
 /** Setup guides written for one registered API: its endpoint, prefix and a real tool of its own. */
-function clientGuides(p, tools) {
+function clientGuides(p, tools, via) {
+  const url = via.url;
   const enabled = tools.filter((t) => t.enabled);
   const sample = enabled.find((t) => t.kind === "read") || enabled[0];
-  const toolName = sample ? `${p.tool_prefix || ""}${sample.name}` : "a_tool_name";
+  const toolName = sample ? `${via.prefix}${sample.name}` : "a_tool_name";
   const sampleArgs = sample && /\{corpNo\}/.test(sample.route || "") ? `{"corpNo": "1078836129"}` : "{}";
-  const port = portOf(p.mcp_url);
-  const localModule = p.has_spec ? "bizplay_mcp.registry_gateway" : "bizplay_mcp.server";
-  const env = p.has_spec
+  const port = portOf(url);
+  const localModule = p.has_spec || p.kind === "mcp" ? "bizplay_mcp.registry_gateway" : "bizplay_mcp.server";
+  const env = p.has_spec || p.kind === "mcp"
     ? { BIZPLAY_USER_ID: "emp001", BIZPLAY_ROLE: "employee", BIZPLAY_COMPANY: "1078836129", FASTMCP_SHOW_SERVER_BANNER: "false" }
     : { BIZPLAY_API_BASE_URL: "embedded", BIZPLAY_USER_ID: "emp001", FASTMCP_SHOW_SERVER_BANNER: "false" };
   const desktopCfg = `"${p.id}": ` + JSON.stringify({
@@ -553,26 +584,27 @@ function clientGuides(p, tools) {
   // With the agent-token requirement switched off there is no header to send.
   const needsToken = SERVER.require_agent_token !== false;
   // mcp-remote refuses plain HTTP to anything but localhost without --allow-http.
-  const plainHttpRemote = p.mcp_url.startsWith("http://") && !LOCAL_HOST.test(hostOf(p.mcp_url));
-  const remoteArgs = ["-y", "mcp-remote", p.mcp_url, "--transport", "http-only",
+  const plainHttpRemote = url.startsWith("http://") && !LOCAL_HOST.test(hostOf(url));
+  const remoteArgs = ["-y", "mcp-remote", url, "--transport", "http-only",
     ...(plainHttpRemote ? ["--allow-http"] : []),
     ...(needsToken ? ["--header", "Authorization: Bearer <YOUR_AGENT_TOKEN>"] : [])];
   const remoteCfg = `"${p.id}": ` + JSON.stringify({ command: "npx", args: remoteArgs }, null, 2);
   const headerArg = needsToken ? ` \\\n  --header "Authorization: Bearer <YOUR_AGENT_TOKEN>"` : "";
-  const endpointIsLocal = LOCAL_HOST.test(hostOf(p.mcp_url));
+  const endpointIsLocal = LOCAL_HOST.test(hostOf(url));
+  const what = via.standalone ? `this server` : `this gateway`;
 
   return {
     "claude-desktop": {
       label: "Claude Desktop", icon: "desktop", ready: true,
-      lead: `Claude Desktop runs on your own machine, so it either connects to this gateway over the network or starts its own copy locally. Pick one of the two entries below.`,
+      lead: `Claude Desktop runs on your own machine, so it either connects to ${what} over the network or starts its own copy locally. Pick one of the two entries below.`,
       steps: [
         { t: "Open the config file", b: `<p>Windows: <span class="mono">%APPDATA%\\Claude\\claude_desktop_config.json</span><br>macOS: <span class="mono">~/Library/Application Support/Claude/claude_desktop_config.json</span></p>` },
-        { t: `Option A, connect to this gateway${endpointIsLocal ? "" : " (recommended)"}`,
+        { t: `Option A, connect to ${what}${endpointIsLocal ? "" : " (recommended)"}`,
           b: codeBlock("g-remote", remoteCfg, endpointIsLocal
             ? "This endpoint is 127.0.0.1, so it only works if Claude Desktop runs on the same machine as the gateway. Use Edit connection to set the address other machines can reach."
             : "Needs Node.js. Issue a token on the Agent Tokens page and paste it in place of the placeholder.") },
         { t: "Option B, run a local copy instead",
-          b: codeBlock("g-desktop", desktopCfg, `Replace the directory with the path to the project on the machine running Claude Desktop. This value is where the portal's own server keeps it. No agent token is needed, because identity comes from the config.`) },
+          b: codeBlock("g-desktop", desktopCfg, `Replace the directory with the path to the project on the machine running Claude Desktop. This value is where the portal's own server keeps it. No agent token is needed, because identity comes from the config.${via.standalone ? " A local copy serves every published backend with prefixed names, since only the HTTP endpoint is per provider." : ""}`) },
         { t: "Quit Claude Desktop from the system tray, then reopen", b: `<p>Closing the window is not enough. The tools appear in the tools menu of a new chat.</p>` },
         { t: "Try it", b: `<p>Ask for something this API covers, for example a call to <span class="mono">${esc(toolName)}</span>.</p>` },
       ],
@@ -580,10 +612,10 @@ function clientGuides(p, tools) {
     "claude-code": {
       label: "Claude Code", icon: "terminal-window", ready: true,
       lead: needsToken
-        ? `Claude Code calls this API over HTTP at ${p.mcp_url} and sends an agent token as a header. Use Connect command above to get a line with the token already in it.`
-        : `This gateway accepts anonymous callers, so one line with no token connects Claude Code to ${p.mcp_url}.`,
+        ? `Claude Code calls this API over HTTP at ${url} and sends an agent token as a header. Use Connect command above to get a line with the token already in it.`
+        : `${what[0].toUpperCase() + what.slice(1)} accepts anonymous callers, so one line with no token connects Claude Code to ${url}.`,
       steps: [
-        { t: "Add the server", b: codeBlock("g-code-1", `claude mcp add --transport http ${p.id} ${p.mcp_url}${headerArg}`,
+        { t: "Add the server", b: codeBlock("g-code-1", `claude mcp add --transport http ${p.id} ${url}${headerArg}`,
           needsToken ? "The token is shown once, when issued. Its user, role and company decide what this API returns."
                      : "No credential is required because the agent-token requirement is switched off on the Security page.") },
         { t: "Check it connected", b: codeBlock("g-code-2", `claude mcp list`) },
@@ -594,16 +626,16 @@ function clientGuides(p, tools) {
       label: "Any MCP client", icon: "plugs-connected", ready: true,
       lead: `Any client that speaks MCP over HTTP can use this API. It needs the endpoint and an Authorization header.`,
       steps: [
-        { t: "Connection details", b: `<dl class="kv"><dt>Endpoint</dt><dd>${esc(p.mcp_url)}</dd><dt>Transport</dt><dd>streamable HTTP</dd><dt>Header</dt><dd>Authorization: Bearer &lt;token&gt;</dd><dt>Tool names</dt><dd>${esc(p.tool_prefix || "no prefix")}</dd></dl>` },
-        { t: "Python, with the FastMCP client", b: codeBlock("g-py", `from fastmcp import Client\nfrom fastmcp.client.transports import StreamableHttpTransport\n\nclient = Client(StreamableHttpTransport(\n    "${p.mcp_url}", auth="<YOUR_AGENT_TOKEN>"))\n\nasync with client as c:\n    tools = await c.list_tools()\n    result = await c.call_tool("${toolName}", ${sampleArgs})`) },
-        { t: "Raw HTTP, to check the token", b: codeBlock("g-curl", `curl -s ${p.mcp_url} \\\n  -H "Authorization: Bearer <YOUR_AGENT_TOKEN>" \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json" \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",\n       "params":{"protocolVersion":"2025-06-18","capabilities":{},\n                 "clientInfo":{"name":"curl","version":"0"}}}'`, "Without the header this returns 401. That is the gateway refusing an unauthenticated agent.") },
+        { t: "Connection details", b: `<dl class="kv"><dt>Endpoint</dt><dd>${esc(url)}</dd><dt>Transport</dt><dd>streamable HTTP</dd><dt>Header</dt><dd>Authorization: Bearer &lt;token&gt;</dd><dt>Tool names</dt><dd>${esc(via.prefix ? via.prefix + "*" : "no prefix")}</dd></dl>` },
+        { t: "Python, with the FastMCP client", b: codeBlock("g-py", `from fastmcp import Client\nfrom fastmcp.client.transports import StreamableHttpTransport\n\nclient = Client(StreamableHttpTransport(\n    "${url}", auth="<YOUR_AGENT_TOKEN>"))\n\nasync with client as c:\n    tools = await c.list_tools()\n    result = await c.call_tool("${toolName}", ${sampleArgs})`) },
+        { t: "Raw HTTP, to check the token", b: codeBlock("g-curl", `curl -s ${url} \\\n  -H "Authorization: Bearer <YOUR_AGENT_TOKEN>" \\\n  -H "Accept: application/json, text/event-stream" \\\n  -H "Content-Type: application/json" \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",\n       "params":{"protocolVersion":"2025-06-18","capabilities":{},\n                 "clientInfo":{"name":"curl","version":"0"}}}'`, "Without the header this returns 401. That is the gateway refusing an unauthenticated agent.") },
       ],
     },
     "chatgpt": (() => {
-      const isHttps = p.mcp_url.startsWith("https://");
+      const isHttps = url.startsWith("https://");
       const ready = isHttps && !needsToken;
       const addSteps = [
-        { t: "Copy this endpoint", b: codeBlock("g-url", p.mcp_url, "This exact URL, including the /mcp path. The root path serves nothing and shows Not found.") },
+        { t: "Copy this endpoint", b: codeBlock("g-url", url, via.standalone ? `This exact URL. It serves only ${esc(p.name)}, so the connector shows this one product, the way a vendor's own MCP app does.` : "This exact URL, including the /mcp path. The root path serves nothing and shows Not found.") },
         { t: "Add it in claude.ai", b: `<p>Settings, then Connectors, then Add custom connector. Paste the URL, give it a name, and click Add. It appears in the chat's tool menu.</p>` },
         { t: "Add it in ChatGPT", b: `<p>Settings, then Connectors, then Add. Paste the same URL. Requires a plan that allows custom connectors.</p>` },
         { t: "Ask for something", b: `<p class="mono">List the corporations I can see.</p><p class="mono">What classification rules does my company have?</p>` },
@@ -634,7 +666,7 @@ function clientGuides(p, tools) {
       label: "Copilot Studio and Agentforce", icon: "buildings", ready: false,
       lead: `Both support remote MCP servers and need the same public HTTPS address and OAuth login as the cloud chat products.`,
       steps: [
-        { t: "Microsoft Copilot Studio", b: `<p>Add the gateway as a custom connector, point it at ${esc(p.mcp_url)} on its public address, then enable it as a tool for the agent.</p>` },
+        { t: "Microsoft Copilot Studio", b: `<p>Add the gateway as a custom connector, point it at ${esc(url)} on its public address, then enable it as a tool for the agent.</p>` },
         { t: "Salesforce Agentforce", b: `<p>Register the endpoint in the Agentforce MCP registry, then grant the agent access to the tools you enabled for this API.</p>` },
         { t: "What to prepare", b: `<p>A hosted gateway with a certificate, OAuth mapped to the customer's identity provider, and an agent token policy per company. The Security page tracks what is still open.</p>` },
       ],
@@ -653,53 +685,79 @@ pages.provider = async () => {
   }
   const d = await api("GET", `/api/registry/${pid}/tools`);
   const tools = d.items, enabled = tools.filter((t) => t.enabled);
-  const guides = clientGuides(p, tools);
+  const via = connectVia(p);
+  const guides = clientGuides(p, tools, via);
   const key = guides[hashParam("c")] ? hashParam("c") : "claude-desktop";
   const g = guides[key];
+  const canDeploy = p.has_spec || p.kind === "mcp";
   $("#page-title").textContent = p.name;
   renderTabs(Object.entries(guides).map(([k, v]) => ({ key: k, label: v.label, icon: v.icon })), key,
-    (k) => { setHash("provider", { p: pid, c: k }); pages.provider(); },
+    (k) => { setHash("provider", { p: pid, c: k, ...(via.standalone ? { via: "standalone" } : {}) }); pages.provider(); },
     p.status === "published" ? { title: "Live", sub: `${enabled.length} tools reachable by agents` } : null);
 
   const shown = enabled.slice(0, 10);
+  const backendLabel = p.kind === "mcp" ? "Upstream MCP server" : "Upstream API";
   $("#page").innerHTML = `
     <div><button class="btn small" id="back-registry"><i class="ph ph-arrow-left"></i> All APIs</button></div>
     <div class="card">
       <div class="card-head">
         <span class="card-brand" style="font-size:16px">${logo(p.name, 0)} ${esc(p.name)}</span>
-        <span style="display:flex;gap:6px;flex-wrap:wrap">${authChip(p.auth_mode)}${statusChip(p.status)}</span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${standaloneChip(p)}${kindChip(p.kind)}${authChip(p.auth_mode)}${statusChip(p.status)}</span>
       </div>
       <div class="tiles" style="grid-template-columns:repeat(4, 1fr)">
-        <div class="tile"><span class="k"><i class="ph ph-link"></i>MCP endpoint
+        <div class="tile"><span class="k"><i class="ph ph-link"></i>Gateway endpoint
           <button class="btn small copy" data-copy="p-endpoint" title="Copy the endpoint" style="margin-left:auto;padding:2px 7px"><i class="ph ph-copy"></i></button></span>
           <span class="v mono" id="p-endpoint">${esc(p.mcp_url)}</span></div>
-        ${tile("cloud", "Upstream API", p.base_url.replace(/^https?:\/\//, ""), true)}
+        ${tile(p.kind === "mcp" ? "plugs-connected" : "cloud", backendLabel, p.base_url.replace(/^https?:\/\//, ""), true)}
         ${tile("plug", "Tools", `${p.tools_enabled} of ${p.tool_count} enabled`)}
         ${tile("textbox", "Tool names", p.tool_prefix ? `${p.tool_prefix}*` : "no prefix")}
       </div>
-      <p class="card-desc" style="-webkit-line-clamp:3">Spec from ${esc(p.spec_source)}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream API accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : "The gateway sends a stored service token on every call."}</p>
+      <p class="card-desc" style="-webkit-line-clamp:3">${p.kind === "mcp" ? "Tools proxied from the MCP server, unchanged" : `Spec from ${esc(p.spec_source)}`}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : "The gateway sends a stored service token on every call."}</p>
       <div class="card-actions">
         <button class="btn small solid" data-act="command"><i class="ph ph-terminal-window"></i> Connect command</button>
         <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit connection</button>
         <button class="btn small" data-act="test"><i class="ph ph-plugs"></i> Test connection</button>
         <button class="btn small" data-act="access"><i class="ph ph-sliders-horizontal"></i> Manage tools</button>
         <button class="btn small ${p.status === "published" ? "" : "solid"}" data-act="${p.status === "published" ? "unpublish" : "publish"}"><i class="ph ${p.status === "published" ? "ph-eye-slash" : "ph-check"}"></i> ${p.status === "published" ? "Unpublish" : "Publish"}</button>
+        ${canDeploy ? `<button class="btn small ${p.standalone ? "" : "solid"}" data-act="${p.standalone ? "undeploy" : "deploy"}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy MCP server" : "Deploy as MCP server"}</button>` : ""}
         ${p.id !== "bizplay" ? `<button class="btn small danger" data-act="delete"><i class="ph ph-trash"></i> Delete</button>` : ""}
       </div>
     </div>
-    ${LOCAL_HOST.test(hostOf(p.mcp_url)) && !LOCAL_HOST.test(location.hostname) ? `<div class="callout warn"><i class="ph ph-warning"></i><span><strong>Other machines cannot reach this endpoint.</strong> It points at ${esc(hostOf(p.mcp_url))}, which only resolves on the server itself. Use Edit connection and set it to <span class="mono">http://${esc(location.hostname)}:${esc(portOf(p.mcp_url))}/mcp</span>, or set PUBLIC_HOST in the server's .env file.</span></div>` : ""}
+    ${LOCAL_HOST.test(hostOf(p.mcp_url)) && !LOCAL_HOST.test(location.hostname) ? `<div class="callout warn"><i class="ph ph-warning"></i><span><strong>Other machines cannot reach this endpoint.</strong> It points at ${esc(hostOf(p.mcp_url))}, which only resolves on the server itself. Use Edit connection and set it to <span class="mono">${esc(location.origin)}/mcp</span>, or set PUBLIC_HOST in the server's .env file.</span></div>` : ""}
+    ${canDeploy ? `
+    <div class="card deploy ${p.standalone ? "on" : ""}">
+      <div class="card-head">
+        <span class="card-brand"><span class="logo ${p.standalone ? "green" : "dark"}"><i class="ph ph-rocket-launch"></i></span> ${p.standalone ? "Deployed as its own MCP server" : "Deploy as its own MCP server"}</span>
+        ${p.standalone ? chip("green", "Serving", "check") : chip("", "Not deployed", "moon")}
+      </div>
+      ${p.standalone ? `
+      <div class="tiles" style="grid-template-columns:2fr 1fr 1fr">
+        <div class="tile"><span class="k"><i class="ph ph-link"></i>Standalone endpoint
+          <button class="btn small copy" data-copy="p-standalone" title="Copy the endpoint" style="margin-left:auto;padding:2px 7px"><i class="ph ph-copy"></i></button></span>
+          <span class="v mono" id="p-standalone">${esc(p.standalone_url)}</span></div>
+        ${tile("textbox", "Tool names", "no prefix")}
+        ${tile("shield-check", "Governance", "same tokens, policy, audit")}
+      </div>
+      <p class="card-desc" style="-webkit-line-clamp:4">One connector, one product: an agent that adds this URL sees only ${esc(p.name)}, with tool names such as <span class="mono">${esc(enabled[0]?.name || "list_items")}</span>. The shared gateway keeps serving it too, prefixed. ${p.status === "published" ? "" : "It answers once the backend is published."}</p>
+      <div class="seg" role="radiogroup" aria-label="Write the instructions for">
+        <label class="seg-opt ${via.standalone ? "" : "on"}"><input type="radio" name="via" value="gateway" ${via.standalone ? "" : "checked"}><i class="ph ph-squares-four"></i><span><strong>Shared gateway</strong><span>Every published backend, tools named ${esc(p.tool_prefix || "")}*</span></span></label>
+        <label class="seg-opt ${via.standalone ? "on" : ""}"><input type="radio" name="via" value="standalone" ${via.standalone ? "checked" : ""}><i class="ph ph-rocket-launch"></i><span><strong>This server only</strong><span>Just ${esc(p.name)}, plain tool names</span></span></label>
+      </div>`
+      : `<p class="card-desc" style="-webkit-line-clamp:4">Gives ${esc(p.name)} an endpoint of its own at <span class="mono">${esc(p.standalone_url)}</span>, serving only its tools with no prefix, the way a vendor's own MCP app appears in claude.ai or ChatGPT. It runs inside this gateway, so it needs no extra process and keeps the same tokens, tool policy, company scoping and audit log. It also publishes the backend on the shared gateway.</p>`}
+    </div>` : ""}
     <div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px;flex-wrap:wrap">
         <h2 class="section-title" style="margin:0">Use ${esc(p.name)} from ${esc(g.label)}</h2>
         ${g.ready ? chip("green", "Works today", "check") : chip("amber", "Needs hosting and OAuth", "warning")}
+        ${via.standalone ? chip("green", "via its own server", "rocket-launch") : chip("", "via the shared gateway", "squares-four")}
       </div>
       <p class="muted" style="max-width:76ch">${esc(g.lead)}</p>
       <div class="steps">${g.steps.map((s, i) => `<div class="step"><span class="step-n">${i + 1}</span><div class="step-b"><strong>${esc(s.t)}</strong>${s.b}</div></div>`).join("")}</div>
     </div>
     <div>
-      <h2 class="section-title">Tools this API exposes to agents</h2>
-      <div class="table-card"><div class="table-wrap"><table><tr><th>Tool name the agent calls</th><th>Kind</th><th>Upstream endpoint</th></tr>
-      ${shown.length ? shown.map((t) => `<tr><td class="mono">${esc((p.tool_prefix || "") + t.name)}${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}</td><td>${t.kind === "write" ? chip("amber", "write", "pencil-simple") : chip("lilac", "read", "eye")}${t.confirm ? ` ${chip("", "confirm first")}` : ""}</td><td class="mono small">${esc(t.route || "composed from several endpoints")}</td></tr>`).join("")
+      <h2 class="section-title">Tools this ${p.kind === "mcp" ? "server" : "API"} exposes to agents</h2>
+      <div class="table-card"><div class="table-wrap"><table><tr><th>Tool name the agent calls</th><th>Kind</th><th>${p.kind === "mcp" ? "Upstream tool" : "Upstream endpoint"}</th></tr>
+      ${shown.length ? shown.map((t) => `<tr><td class="mono">${esc(via.prefix + t.name)}${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}</td><td>${t.kind === "write" ? chip("amber", "write", "pencil-simple") : chip("lilac", "read", "eye")}${t.confirm ? ` ${chip("", "confirm first")}` : ""}</td><td class="mono small">${esc(p.kind === "mcp" ? t.name : (t.route || "composed from several endpoints"))}</td></tr>`).join("")
         : `<tr><td colspan="3">${emptyState("sliders-horizontal", "No tools enabled", "Enable some on the Access Control page and they appear here.")}</td></tr>`}
       </table></div></div>
       ${enabled.length > shown.length ? `<p class="muted small" style="margin-top:8px">${enabled.length - shown.length} more enabled. Open Manage tools to see the full list.</p>` : ""}
@@ -707,19 +765,24 @@ pages.provider = async () => {
     <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Tokens are shown once, so issue a new one and revoke the old if you lost it.</span></div>`;
 
   $("#back-registry").onclick = () => { location.hash = "registry"; };
+  $("#page").querySelectorAll("[name=via]").forEach((r) => r.onchange = () => {
+    setHash("provider", { p: pid, c: key, ...(r.value === "standalone" ? { via: "standalone" } : {}) }); pages.provider();
+  });
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     const act = b.dataset.act;
     try {
       if (act === "access") { setHash("access", { p: pid }); return; }
-      if (act === "command") return commandDialog(p);
+      if (act === "command") return commandDialog(p, via);
       if (act === "edit") return editDialog(p);
       if (act === "test") return testDialog(pid);
       if (act === "delete") {
         if (!confirm(`Delete ${p.name}?`)) return;
         await api("DELETE", `/api/registry/${pid}`); toast("Provider deleted", p.name); location.hash = "registry"; return;
       }
-      await api("POST", `/api/registry/${pid}/${act}`);
-      toast(act === "publish" ? "Published" : "Unpublished", `${p.name} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`);
+      const r = await api("POST", `/api/registry/${pid}/${act}`);
+      if (act === "deploy") { toast("Deployed", `${p.name} now answers at ${r.standalone_url}`, 5000); setHash("provider", { p: pid, c: key, via: "standalone" }); }
+      else if (act === "undeploy") { toast("Undeployed", `${r.standalone_url} now returns 404; the shared gateway still serves it`, 5000); setHash("provider", { p: pid, c: key }); }
+      else toast(act === "publish" ? "Published" : "Unpublished", `${p.name} ${act === "publish" ? "is now reachable by agents" : "is hidden from agents"}`);
       pages.provider();
     } catch (err) { toast("Action failed", err.message, 4500); }
   });

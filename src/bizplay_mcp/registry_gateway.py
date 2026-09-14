@@ -1,14 +1,24 @@
 """Registry gateway: serves every provider published in the portal.
 
-For each published provider the portal stored an OpenAPI spec. This gateway
-turns each spec into MCP tools (FastMCP.from_openapi), mounts them under the
-provider id, and wraps every call in governance the upstream API may lack:
+Two kinds of backend sit behind it:
+
+  * ``openapi``: the portal stored an OpenAPI spec; FastMCP turns it into tools.
+  * ``mcp``: an MCP server that already exists; its tools are proxied.
+
+Both are mounted under the provider id and wrapped in governance the backend
+may lack:
 
   * bearer auth on the gateway (portal-issued agent tokens)
   * tool policy from the portal (enabled, allowed roles)
   * company scoping: arguments naming a company must match the caller's
     token, and records belonging to other companies are removed from results
   * an audit entry for every call
+
+Endpoints:
+
+  /mcp            every published provider, tools prefixed with the provider id
+  /mcp/<id>       one provider on its own ("deployed as an MCP server" in the
+                  portal), tool names unprefixed; 404 until it is deployed
 
 Upstream auth follows the provider's auth mode: "bearer" sends the stored
 service token, "network" and "open" send nothing.
@@ -21,25 +31,39 @@ Run:
 from __future__ import annotations
 
 import argparse
-import os
+import json
 from collections.abc import Sequence
 from typing import Any, Callable
 
 import httpx2
 from fastmcp import FastMCP
+from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.providers.openapi import OpenAPIProvider
+from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
 from fastmcp.tools.base import ToolResult
+from mcp.types import ToolAnnotations
 
-from . import audit, policy_store
+from . import audit, policy_store, specs
 from .auth import current_principal, gateway_auth
 
 TransportFactory = Callable[[dict], httpx2.AsyncBaseTransport | None]
+McpClientFactory = Callable[[dict], Any]
 
 
 def namespace_for(provider_id: str) -> str:
     return provider_id.replace("-", "_")
+
+
+def standalone_provider() -> str | None:
+    """The provider id when the request came in on /mcp/<id>, else None."""
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return None
+    return (request.scope.get("state") or {}).get("standalone")
 
 
 class GovernanceMiddleware(Middleware):
@@ -48,6 +72,9 @@ class GovernanceMiddleware(Middleware):
     Also keeps the gateway in step with the portal: before answering, it checks
     whether the stored registry changed and adds any newly published API, so
     registering one needs no restart.
+
+    On a standalone endpoint (/mcp/<id>) only that provider's tools are listed,
+    without the prefix, and calls are mapped back to the prefixed tool.
     """
 
     def __init__(self, registry: "ProviderRegistry") -> None:
@@ -69,29 +96,52 @@ class GovernanceMiddleware(Middleware):
         state = policy_store.load()
         principal = current_principal()
         role = principal.claims.get("role", "employee")
+        only = standalone_provider()
         visible = []
         for tool in tools:
             parts = self.split(tool.name)
             if parts is None:
-                visible.append(tool)
+                if only is None:
+                    visible.append(tool)
+                continue
+            if only is not None and parts[0] != only:
                 continue
             allowed, _ = policy_store.check_tool_access(state, parts[0], parts[1], role)
-            if allowed:
-                visible.append(tool)
+            if not allowed:
+                continue
+            update: dict[str, Any] = {"name": parts[1]} if only else {}
+            # Tell clients (and any gateway proxying this one) which tools only read.
+            policy = state["providers"][parts[0]]["tools"][parts[1]]
+            if policy["kind"] == "read" and tool.annotations is None:
+                update["annotations"] = ToolAnnotations(read_only_hint=True)
+            visible.append(tool.model_copy(update=update) if update else tool)
         return visible
 
     async def on_call_tool(self, context: MiddlewareContext, call_next) -> ToolResult:
         self.registry.sync()
         name = context.message.name
         arguments = dict(context.message.arguments or {})
-        parts = self.split(name)
-        if parts is None:
-            return await call_next(context)
-        pid, op = parts
         principal = current_principal()
         role = principal.claims.get("role", "employee")
         company = str(principal.claims.get("company") or "")
         via = principal.source
+
+        only = standalone_provider()
+        if only is not None:
+            # Plain names belong to this provider; another provider's prefixed
+            # name is refused rather than silently prefixed again.
+            parts = self.split(name)
+            if parts is not None and parts[0] != only:
+                reason = f"'{name}' is not served on the standalone endpoint of '{only}'"
+                audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
+                raise ToolError(f"Access denied: {reason}")
+            if parts is None:
+                name = namespace_for(only) + "_" + name
+                context = context.copy(message=context.message.model_copy(update={"name": name}))
+        parts = self.split(name)
+        if parts is None:
+            return await call_next(context)
+        pid, op = parts
 
         allowed, reason = policy_store.check_tool_access(policy_store.load(), pid, op, role)
         if not allowed:
@@ -134,9 +184,11 @@ class ProviderRegistry:
     its tools appear on the next request, with no restart.
     """
 
-    def __init__(self, gateway: FastMCP, transport_factory: TransportFactory | None = None) -> None:
+    def __init__(self, gateway: FastMCP, transport_factory: TransportFactory | None = None,
+                 mcp_client_factory: McpClientFactory | None = None) -> None:
         self.gateway = gateway
         self.transport_factory = transport_factory
+        self.mcp_client_factory = mcp_client_factory
         self.prefixes: dict[str, str] = {}
         self._loaded: set[str] = set()
         self._stamp: tuple[float, int] | None = None
@@ -156,46 +208,105 @@ class ProviderRegistry:
         if not force and not self._changed():
             return
         state = policy_store.load()
+        dirty = False
         for provider in policy_store.published_registry_providers(state):
             if provider["id"] in self._loaded:
                 continue
-            self._add(provider, state)
+            dirty |= self._add(provider, state)
+        if dirty:
+            policy_store.save(state)
+            self._changed()  # our own write is not a change worth reloading
 
-    def _add(self, provider: dict, state: dict) -> None:
-        headers = {}
-        if provider.get("auth_mode", "bearer") == "bearer":
-            secret = state["credentials"].get(provider.get("upstream_credential_id", ""), {}).get("secret", "")
-            if secret:
-                headers["Authorization"] = f"Bearer {secret}"
-        client = httpx2.AsyncClient(
-            base_url=provider["base_url"], headers=headers, timeout=30.0,
-            transport=self.transport_factory(provider) if self.transport_factory else None,
-        )
+    @staticmethod
+    def _upstream_headers(provider: dict, state: dict) -> dict[str, str]:
+        if provider.get("auth_mode", "bearer") != "bearer":
+            return {}
+        secret = state["credentials"].get(provider.get("upstream_credential_id", ""), {}).get("secret", "")
+        return {"Authorization": f"Bearer {secret}"} if secret else {}
+
+    def _add(self, provider: dict, state: dict) -> bool:
+        """Mount one provider. Returns True when the stored state was corrected."""
+        headers = self._upstream_headers(provider, state)
         ns = namespace_for(provider["id"])
-        # validate_output=False: real-world specs often drift from real responses
-        # (e.g. Spring's "200 OK" status enum vs an actual "OK"). A strict output
-        # schema would make the MCP client reject perfectly good data.
-        self.gateway.add_provider(
-            OpenAPIProvider(openapi_spec=provider["spec"], client=client, validate_output=False),
-            namespace=ns,
-        )
+        changed = False
+        if provider.get("kind") == "mcp":
+            if self.mcp_client_factory:
+                factory = lambda: self.mcp_client_factory(provider)  # noqa: E731
+            else:
+                factory = lambda: ProxyClient(StreamableHttpTransport(provider["base_url"], headers=headers))  # noqa: E731
+            self.gateway.add_provider(ProxyProvider(factory), namespace=ns)
+        else:
+            # Older registrations stored raw operationIds; serve what FastMCP names.
+            if specs.reconcile_tool_names(provider):
+                changed = True
+            client = httpx2.AsyncClient(
+                base_url=provider["base_url"], headers=headers, timeout=30.0,
+                transport=self.transport_factory(provider) if self.transport_factory else None,
+            )
+            # validate_output=False: real-world specs often drift from real responses
+            # (e.g. Spring's "200 OK" status enum vs an actual "OK"). A strict output
+            # schema would make the MCP client reject perfectly good data.
+            self.gateway.add_provider(
+                OpenAPIProvider(openapi_spec=provider["spec"], client=client, validate_output=False),
+                namespace=ns,
+            )
         self.prefixes[ns + "_"] = provider["id"]
         self._loaded.add(provider["id"])
+        return changed
 
 
-def build_registry_gateway(transport_factory: TransportFactory | None = None) -> FastMCP:
+def build_registry_gateway(transport_factory: TransportFactory | None = None,
+                           mcp_client_factory: McpClientFactory | None = None) -> FastMCP:
     gateway = FastMCP(
         name="Bizplay Registry Gateway",
         instructions=(
-            "Tools generated from APIs registered in the Bizplay MCP portal. Tool names are "
-            "prefixed with the provider id. Results are limited to the caller's own company."
+            "Tools from APIs and MCP servers registered in the Bizplay MCP portal. On the shared "
+            "endpoint tool names are prefixed with the provider id. Results are limited to the "
+            "caller's own company."
         ),
         auth=gateway_auth(),
     )
-    registry = ProviderRegistry(gateway, transport_factory)
+    registry = ProviderRegistry(gateway, transport_factory, mcp_client_factory)
     registry.sync(force=True)
     gateway.add_middleware(GovernanceMiddleware(registry))
     return gateway
+
+
+class RegistryASGI:
+    """The gateway over HTTP: /mcp for everything, /mcp/<id> for one deployed provider.
+
+    A standalone path is rewritten to the single MCP route and the provider id
+    is left in the request state, where GovernanceMiddleware reads it.
+    """
+
+    def __init__(self, gateway: FastMCP) -> None:
+        self.gateway = gateway
+        # Public hosts vary (IP, domain, tunnel), so host/origin checks are off.
+        self.inner = gateway.http_app(path="/mcp", host_origin_protection=False)
+
+    @property
+    def lifespan(self):
+        return self.inner.lifespan
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            path = scope["path"]
+            if path.startswith("/mcp/") and path.strip("/") != "mcp":
+                pid = path[len("/mcp/"):].strip("/")
+                p = policy_store.load()["providers"].get(pid)
+                if not p or p.get("status") != "published" or not p.get("standalone"):
+                    body = json.dumps({"error": f"No MCP server is deployed at /mcp/{pid}. "
+                                                "Deploy it from the provider's page in the portal, or use /mcp."}).encode()
+                    await send({"type": "http.response.start", "status": 404,
+                                "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+                scope = {**scope, "path": "/mcp", "raw_path": b"/mcp", "state": {**(scope.get("state") or {}), "standalone": pid}}
+        await self.inner(scope, receive, send)
+
+
+def build_registry_asgi(gateway: FastMCP | None = None) -> RegistryASGI:
+    return RegistryASGI(gateway or build_registry_gateway())
 
 
 def main() -> None:
@@ -208,7 +319,9 @@ def main() -> None:
     if args.transport == "stdio":
         gateway.run(transport="stdio")
     else:
-        gateway.run(transport="http", host=args.host, port=args.port)
+        import uvicorn
+
+        uvicorn.run(build_registry_asgi(gateway), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

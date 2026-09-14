@@ -91,6 +91,11 @@ AUTH_MODES = {
     "open": "Open: the API accepts anonymous calls. Demo data only; recorded as an accepted risk.",
 }
 
+KINDS = {
+    "openapi": "REST API described by an OpenAPI spec; the gateway generates the tools.",
+    "mcp": "An MCP server that already exists; the gateway proxies its tools.",
+}
+
 # Argument names / response fields that identify a company. The gateway
 # forces them to match the caller's token when the upstream API cannot
 # scope data itself.
@@ -225,8 +230,18 @@ def check_tool_access(state: dict, provider_id: str, tool: str, role: str) -> tu
 
 
 def published_registry_providers(state: dict) -> list[dict]:
-    """Published providers that carry an OpenAPI spec (served by the registry gateway)."""
-    return [p for p in state["providers"].values() if p.get("status") == "published" and p.get("spec")]
+    """Published providers the registry gateway serves: OpenAPI-backed or proxied MCP servers."""
+    return [p for p in state["providers"].values()
+            if p.get("status") == "published" and (p.get("spec") or p.get("kind") == "mcp")]
+
+
+def standalone_url(provider: dict) -> str:
+    """Where this one provider is served on its own, with unprefixed tool names.
+
+    Lives next to the gateway endpoint the provider was registered on, so it
+    inherits that address's reachability and TLS: <mcp_url>/<provider id>.
+    """
+    return provider["mcp_url"].rstrip("/") + "/" + provider["id"] if provider.get("mcp_url") else ""
 
 
 def company_scope(value: object, company: str) -> tuple[object, int]:
