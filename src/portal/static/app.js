@@ -217,7 +217,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 function renderTabs(items, active, onPick, note) {
   const el = $("#tabs");
   el.innerHTML = items.map((t) => `<button class="tab ${t.key === active ? "active" : ""}" data-key="${esc(t.key)}"><span class="tab-ic"><i class="ph ph-${t.icon}"></i></span>${esc(t.label)}${t.count != null ? `<span class="count">${t.count}</span>` : ""}</button>`).join("")
-    + `<span class="spacer"></span>` + (note ? `<span class="tab-note"><span class="tab-ic"><i class="ph ph-check"></i></span><span><strong>${esc(note.title)}</strong><span>${esc(note.sub)}</span></span></span>` : "");
+    + `<span class="spacer"></span>` + (note ? `<span class="tab-note ${note.tone || ""}"><span class="tab-ic"><i class="ph ${note.tone === "warn" ? "ph-warning" : "ph-check"}"></i></span><span><strong>${esc(note.title)}</strong><span>${esc(note.sub)}</span></span></span>` : "");
   el.classList.remove("hidden");
   el.querySelectorAll(".tab").forEach((b) => b.onclick = () => onPick(b.dataset.key));
 }
@@ -1035,32 +1035,76 @@ pages.provider = async () => {
 pages.security = async () => {
   const d = await api("GET", "/api/security");
   const s = d.settings;
-  $("#page").innerHTML = `
-    <div class="two">
-      <div>
-        <h2 class="section-title">Gateway settings</h2>
-        <div class="card">
-          <div class="form">
-            <label class="check"><input type="checkbox" class="switch" data-s="require_upstream_bearer" ${s.require_upstream_bearer ? "checked" : ""}> Require a bearer token on every Bizplay API endpoint</label>
-            <label class="check"><input type="checkbox" class="switch" data-s="require_gateway_bearer" ${s.require_gateway_bearer ? "checked" : ""}> Require an agent token on the MCP gateway (HTTP)</label>
-            <label class="check"><input type="checkbox" class="switch" data-s="confirm_on_write" ${s.confirm_on_write ? "checked" : ""}> Force user confirmation on all write tools</label>
-            <label class="field">Default agent token lifetime (days) <input type="number" data-s="token_ttl_days" value="${s.token_ttl_days}" min="1" max="365" style="width:140px"></label>
-            <label class="field">Public MCP endpoint <input data-s="public_mcp_url" value="${esc(s.public_mcp_url || "")}" placeholder="https://your-host/mcp, blank to use this server's own address">
-              <span class="muted small">The address agents reach the gateway on, when a tunnel or nginx sits in front. Every newly registered API inherits it.</span></label>
-          </div>
-          <p class="muted small" style="margin:12px 0 0">The agent token switch is enforced by the gateways, which read it at startup, so restart them after changing it. Turning it off lets anyone call the gateway and lowers the checklist score. The upstream switch records policy only, since that is the provider's own API.</p>
-        </div>
-        <h2 class="section-title" style="margin-top:22px">Identity mapping</h2>
-        <div class="cards">${Object.entries(d.identity).map(([pid, i], n) => `<div class="card"><div class="card-head"><span class="card-brand">${logo(pid, n)} ${esc(pid)}</span>${chip("lilac", i.issuer, "fingerprint")}</div><dl class="kv"><dt>user claim</dt><dd>${esc(i.user_claim)}</dd><dt>role claim</dt><dd>${esc(i.role_claim)}</dd><dt>company claim</dt><dd>${esc(i.company_claim)}</dd></dl></div>`).join("")}</div>
-        <p class="muted small" style="margin-top:8px">Production: point the issuer at Bizplay SSO (OAuth 2.1 / OIDC) so tokens are signed JWTs verified by key, not looked up in a table.</p>
+  const passed = d.checklist.filter((c) => c.ok).length, score = Math.round(100 * passed / d.checklist.length);
+  const tab = ["checklist", "settings", "credentials", "identity"].includes(hashParam("t")) ? hashParam("t") : "checklist";
+  renderTabs([
+    { key: "checklist", label: "Checklist", icon: "list-checks", count: `${passed}/${d.checklist.length}` },
+    { key: "settings", label: "Gateway settings", icon: "sliders-horizontal" },
+    { key: "credentials", label: "Upstream credentials", icon: "key", count: d.credentials.length },
+    { key: "identity", label: "Identity mapping", icon: "fingerprint", count: Object.keys(d.identity).length },
+  ], tab, (k) => { setHash("security", { t: k }); pages.security(); },
+  { title: `Security score ${score}%`, sub: `${passed} of ${d.checklist.length} checks pass`, tone: score >= 70 ? "" : "warn" });
+
+  // One setting per row: what it is on the left, the control on the right.
+  const setting = (key, title, help, control) => `
+    <div class="setting"><div class="setting-text"><strong>${title}</strong><p class="muted small">${help}</p></div><div class="setting-ctl">${control}</div></div>`;
+  const toggle = (key) => `<input type="checkbox" class="switch" data-s="${key}" ${s[key] ? "checked" : ""} aria-label="${key}">`;
+
+  const views = {
+    checklist: `
+      <div class="stats">
+        <div class="stat"><span class="num" style="color:${score >= 70 ? "var(--green-ink)" : "var(--amber-ink)"}">${score}%</span><span class="lbl">Security score</span></div>
+        <div class="stat"><span class="num">${passed}</span><span class="lbl">Checks passing</span></div>
+        <div class="stat"><span class="num">${d.checklist.length - passed}</span><span class="lbl">Open items</span></div>
+        <div class="stat"><span class="num">${d.credentials.filter((c) => c.rotated_at).length} / ${d.credentials.length}</span><span class="lbl">Credentials rotated at least once</span></div>
       </div>
-      <div>
-        <h2 class="section-title">Upstream credentials</h2>
-        <div class="cards" style="grid-template-columns:1fr">${d.credentials.map((c, n) => `<div class="card"><div class="card-head"><span class="card-brand">${logo(c.provider_id, n)} ${esc(c.label)}</span>${c.rotated_at ? chip("green", "Rotated", "arrows-clockwise") : chip("", "Never rotated", "clock")}</div><div class="tiles">${tile("key", "Secret", c.secret, true)}${tile("calendar-blank", "Rotated", c.rotated_at ? fmtDate(c.rotated_at) : "never")}</div><div class="card-actions"><button class="btn small solid" data-rotate="${esc(c.id)}"><i class="ph ph-arrows-clockwise"></i> Rotate</button></div></div>`).join("")}</div>
-        <h2 class="section-title" style="margin-top:22px">Checklist</h2>
-        <div class="checklist">${d.checklist.map((c) => `<div class="check-item ${c.ok ? "ok" : "bad"}"><span class="mark"><i class="ph ${c.ok ? "ph-check" : "ph-x"}"></i></span><div><strong>${esc(c.label)}</strong><div class="muted small">${esc(c.detail)}</div></div></div>`).join("")}</div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th style="width:120px">Status</th><th>Check</th><th>Detail</th></tr>
+        ${d.checklist.map((c) => `<tr><td>${c.ok ? chip("green", "Pass", "check") : chip("red", "Open", "x")}</td><td><strong>${esc(c.label)}</strong></td><td class="small muted">${esc(c.detail)}</td></tr>`).join("")}
+      </table></div></div>
+      <div class="callout"><i class="ph ph-info"></i><span>Two of these stay open by design in the mockup: OAuth 2.1 for agents and a vault for secrets are production work. The rest are decided on the Gateway settings tab and by how each backend is registered.</span></div>`,
+
+    settings: `
+      <div class="card settings-list">
+        ${setting("require_upstream_bearer", "Bizplay API endpoints require a bearer token",
+          "Records the policy that every /api/* call carries the service token. Enforced by the provider's own API, not here.", toggle("require_upstream_bearer"))}
+        ${setting("require_gateway_bearer", "MCP gateway requires an agent token",
+          "Agents must present a portal-issued token over HTTP. Read by the gateways at startup, so restart them after changing it. Off means anyone who reaches the gateway is the same demo user.", toggle("require_gateway_bearer"))}
+        ${setting("confirm_on_write", "Write tools ask for confirmation",
+          "Turning this on sets confirm-before-call on every write tool of every backend at once.", toggle("confirm_on_write"))}
+        ${setting("token_ttl_days", "Default agent token lifetime",
+          "Days before a newly issued agent token expires. The checklist flags anything over 90.", `<div class="ctl-inline"><input type="number" data-s="token_ttl_days" value="${s.token_ttl_days}" min="1" max="365" aria-label="Token lifetime in days"><span class="muted small">days</span></div>`)}
+        ${setting("public_mcp_url", "Public MCP endpoint",
+          `The address agents use when a tunnel or nginx sits in front. New registrations inherit it. Blank means this portal's own address, ${esc(SERVER.portal_mcp_url || location.origin + "/mcp")}.`,
+          `<input data-s="public_mcp_url" value="${esc(s.public_mcp_url || "")}" placeholder="${esc(SERVER.portal_mcp_url || "https://your-host/mcp")}" aria-label="Public MCP endpoint" class="ctl-wide">`)}
       </div>
-    </div>`;
+      <p class="muted small">Changes save as you make them.</p>`,
+
+    credentials: `
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Credential</th><th>Backend</th><th>Secret</th><th>Rotated</th><th></th></tr>
+        ${d.credentials.length ? d.credentials.map((c, n) => `<tr>
+          <td><span class="name">${logo(c.provider_id, n)} <span>${esc(c.label)}<div class="sub">${esc(c.type)} token the gateway sends</div></span></span></td>
+          <td class="mono">${esc(c.provider_id)}</td>
+          <td class="mono">${esc(c.secret)}</td>
+          <td>${c.rotated_at ? `${chip("green", "Rotated", "arrows-clockwise")}<div class="sub">${esc(fmtDate(c.rotated_at))}</div>` : chip("amber", "Never rotated", "clock")}</td>
+          <td class="actions"><button class="btn small" data-rotate="${esc(c.id)}"><i class="ph ph-arrows-clockwise"></i> Rotate</button></td>
+        </tr>`).join("") : `<tr><td colspan="5">${emptyState("key", "No upstream credentials", "Backends in bearer mode get one when they are registered.")}</td></tr>`}
+      </table></div></div>
+      <div class="callout"><i class="ph ph-info"></i><span>Secrets are masked here and never shown again after rotation. The mockup keeps them in a JSON file; production keeps them in a vault.</span></div>`,
+
+    identity: `
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Backend</th><th>Issuer</th><th>User claim</th><th>Role claim</th><th>Company claim</th></tr>
+        ${Object.entries(d.identity).map(([pid, i], n) => `<tr>
+          <td><span class="name">${logo(pid, n)} ${esc(pid)}</span></td>
+          <td>${chip("lilac", i.issuer, "fingerprint")}</td>
+          <td class="mono">${esc(i.user_claim)}</td><td class="mono">${esc(i.role_claim)}</td><td class="mono">${esc(i.company_claim)}</td>
+        </tr>`).join("")}
+      </table></div></div>
+      <div class="callout"><i class="ph ph-info"></i><span>How the gateway reads who is calling from an agent token. Production points the issuer at Bizplay SSO (OAuth 2.1 / OIDC), so tokens are signed JWTs verified by key rather than looked up in a table.</span></div>`,
+  };
+  $("#page").innerHTML = views[tab];
   $("#page").querySelectorAll("[data-s]").forEach((inp) => inp.onchange = async () => {
     const value = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
     const body = { [inp.dataset.s]: value };

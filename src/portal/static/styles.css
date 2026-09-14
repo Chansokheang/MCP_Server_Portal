@@ -16,7 +16,7 @@
   --line-strong: #cfd6e0;
   --ink: #1c2433;
   --ink-2: #4a5568;
-  --ink-3: #7b8794;
+  --ink-3: #66727f;   /* 5.2:1 on white, so helper text stays readable */
 
   --primary: #2f6bff;
   --primary-hover: #245be0;
@@ -150,6 +150,9 @@ i.ph, i.ph-fill { font-size: 16px; line-height: 1; vertical-align: -3px; }
 .tab-note .tab-ic { width: 22px; height: 22px; border-radius: 50%; background: var(--green); color: #fff; display: grid; place-items: center; }
 .tab-note strong { color: var(--green-ink); font-weight: 600; display: block; line-height: 1.15; }
 .tab-note span { color: var(--green-ink); font-size: 11px; opacity: .8; }
+.tab-note.warn { background: var(--amber-soft); }
+.tab-note.warn .tab-ic { background: var(--amber); }
+.tab-note.warn strong, .tab-note.warn span { color: var(--amber-ink); }
 
 /* ---------- page body ---------- */
 .page-body { padding: 20px 28px 40px; display: grid; gap: 18px; align-content: start; }
@@ -241,6 +244,18 @@ td .sub { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
 td.actions { white-space: nowrap; text-align: right; }
 td.actions .btn + .btn { margin-left: 6px; }
 .row-link { cursor: pointer; }
+
+/* ---------- settings list (Security page) ---------- */
+.settings-list { padding: 0 18px; gap: 0; }
+.setting { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.setting:last-child { border-bottom: 0; }
+.setting-text strong { display: block; font-weight: 600; margin-bottom: 2px; }
+.setting-text p { margin: 0; max-width: 70ch; }
+.setting-ctl { display: flex; align-items: center; justify-content: flex-end; min-width: 60px; }
+.ctl-inline { display: flex; align-items: center; gap: 8px; }
+.ctl-inline input { width: 90px; text-align: right; }
+.ctl-wide { width: 360px; max-width: 40vw; }
+@media (max-width: 760px) { .setting { grid-template-columns: 1fr; gap: 10px; } .setting-ctl { justify-content: flex-start; } .ctl-wide { width: 100%; max-width: none; } }
 
 /* ---------- checklist, callouts, flow ---------- */
 .checklist { display: grid; gap: 8px; }
