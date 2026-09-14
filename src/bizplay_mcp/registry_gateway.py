@@ -45,11 +45,33 @@ from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
 from fastmcp.tools.base import ToolResult
 from mcp.types import ToolAnnotations
 
-from . import audit, policy_store, specs
+from . import audit, oauth, policy_store, specs
 from .auth import current_principal, gateway_auth
 
 TransportFactory = Callable[[dict], httpx2.AsyncBaseTransport | None]
-McpClientFactory = Callable[[dict], Any]
+# (provider record, headers for this call) -> fastmcp Client to the backend
+McpClientFactory = Callable[[dict, dict[str, str]], Any]
+
+
+async def _inject_user_token(request: httpx2.Request) -> None:
+    """httpx event hook: send the calling user's own token when the gateway holds one."""
+    token = oauth.upstream_token.get()
+    if token:
+        request.headers["Authorization"] = f"Bearer {token}"
+
+
+class ResilientProxyProvider(ProxyProvider):
+    """A proxied MCP server that cannot be reached lists no tools instead of failing the whole gateway.
+
+    A backend in OAuth mode refuses anonymous callers; until someone links an
+    account there is no token to list its tools with.
+    """
+
+    async def _list_tools(self) -> Sequence[Any]:
+        try:
+            return await super()._list_tools()
+        except Exception:  # noqa: BLE001 - connection, auth, or protocol failure: same outcome
+            return []
 
 
 def namespace_for(provider_id: str) -> str:
@@ -142,10 +164,26 @@ class GovernanceMiddleware(Middleware):
             return await call_next(context)
         pid, op = parts
 
-        allowed, reason = policy_store.check_tool_access(policy_store.load(), pid, op, role)
+        state = policy_store.load()
+        allowed, reason = policy_store.check_tool_access(state, pid, op, role)
         if not allowed:
             audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
             raise ToolError(f"Access denied: {reason}")
+
+        # OAuth backends get the calling user's own token, never a shared one.
+        provider = state["providers"][pid]
+        user_token = None
+        if provider.get("auth_mode") == "oauth":
+            try:
+                user_token = await oauth.access_token_for(state, provider, principal.user_id)
+            except oauth.OAuthError as exc:
+                audit.record(principal.user_id, name, arguments, "error", f"token refresh failed: {exc}"[:200], via=via)
+                raise ToolError(f"{provider['name']}: your linked account needs to be connected again ({exc})") from None
+            if not user_token:
+                reason = (f"user '{principal.user_id}' has not connected a {provider['name']} account. "
+                          f"Link it in the Bizplay MCP portal: open {provider['name']}, then Connect account.")
+                audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
+                raise ToolError(f"Account not connected: {reason}")
 
         # Company scoping on inputs: a caller may only name their own company.
         # With no company on the caller (token requirement switched off) there is
@@ -157,11 +195,14 @@ class GovernanceMiddleware(Middleware):
                 audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
                 raise ToolError(f"Access denied: {reason}")
 
+        token_scope = oauth.upstream_token.set(user_token)
         try:
             result = await call_next(context)
         except Exception as exc:
             audit.record(principal.user_id, name, arguments, "error", str(exc)[:200], via=via)
             raise
+        finally:
+            oauth.upstream_token.reset(token_scope)
 
         # Company scoping on outputs: drop other companies' records.
         removed = 0
@@ -227,13 +268,22 @@ class ProviderRegistry:
         """Mount one provider. Returns True when the stored state was corrected."""
         headers = self._upstream_headers(provider, state)
         ns = namespace_for(provider["id"])
+        pid = provider["id"]
         changed = False
         if provider.get("kind") == "mcp":
+            def call_headers() -> dict[str, str]:
+                # The user's token for the call in flight; for listing tool metadata,
+                # any linked user's token will do (the list is not per user).
+                token = oauth.upstream_token.get()
+                if token is None and provider.get("auth_mode") == "oauth":
+                    token = oauth.any_token(policy_store.load(), pid)
+                return {**headers, "Authorization": f"Bearer {token}"} if token else dict(headers)
+
             if self.mcp_client_factory:
-                factory = lambda: self.mcp_client_factory(provider)  # noqa: E731
+                factory = lambda: self.mcp_client_factory(provider, call_headers())  # noqa: E731
             else:
-                factory = lambda: ProxyClient(specs.mcp_transport(provider["base_url"], headers))  # noqa: E731
-            self.gateway.add_provider(ProxyProvider(factory), namespace=ns)
+                factory = lambda: ProxyClient(specs.mcp_transport(provider["base_url"], call_headers()))  # noqa: E731
+            self.gateway.add_provider(ResilientProxyProvider(factory), namespace=ns)
         else:
             # Older registrations stored raw operationIds; serve what FastMCP names.
             if specs.reconcile_tool_names(provider):
@@ -241,6 +291,7 @@ class ProviderRegistry:
             client = httpx2.AsyncClient(
                 base_url=provider["base_url"], headers=headers, timeout=30.0,
                 transport=self.transport_factory(provider) if self.transport_factory else None,
+                event_hooks={"request": [_inject_user_token]},
             )
             # validate_output=False: real-world specs often drift from real responses
             # (e.g. Spring's "200 OK" status enum vs an actual "OK"). A strict output

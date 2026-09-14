@@ -60,6 +60,7 @@ Open http://127.0.0.1:18090 and sign in with `admin@bizplay.co.kr` / `admin1234`
 | Bearer | API rejects anonymous calls | Service token required, connection test must see 401 | Sends the service token |
 | Network-isolated | None, firewall only | Allowlisted gateway address recorded | Sends nothing |
 | Open | None | Allowed, flagged red as accepted risk | Sends nothing, enforces everything itself |
+| OAuth per user | None; the backend has its own auth server | Authorization URL, token URL and client id known | Sends the calling user's own token, refreshed as needed |
 
 In every mode the gateway still requires agent tokens, applies tool policy, and
 scopes results to the caller's company: any argument named `corpNo` (or similar)
@@ -116,6 +117,40 @@ detail page writes its setup instructions for whichever endpoint you pick.
 The portal process serves this gateway too, at its own origin, so one host name
 covers the UI, `/mcp` and `/mcp/<id>`. That is the endpoint the register dialog
 prefills unless a public address is set on the Security page.
+
+### Per-user OAuth: the gateway as token broker
+
+Backends A and B may each have their own auth server. The AI client never
+sees either: it authenticates to the gateway once, and the gateway exchanges
+that identity for the right backend token on every call.
+
+```
+Claude ──(one login: gateway)──► Gateway ──(user's token from auth server A)──► backend A
+                                         ──(user's token from auth server B)──► backend B
+```
+
+Register the backend with auth mode **OAuth**. For MCP servers that publish
+their auth metadata (RFC 9728 / RFC 8414), **Discover** fills the endpoints in
+and registers the gateway as a client (RFC 7591); otherwise enter the
+authorization URL, token URL and client id, and whitelist the redirect URL
+shown (`<portal origin>/oauth/callback`). Then on the provider page:
+
+1. **Connect account**: pick the Bizplay user id the account belongs to (the
+   identity on the agent token), sign in at the backend's auth server in the
+   tab that opens (authorization code + PKCE), and land back in the portal.
+2. The gateway stores the access and refresh tokens per (user, backend),
+   refreshes them before they expire, and attaches the access token to that
+   user's calls. A caller who has not linked an account gets a tool error
+   saying so; nobody else's token is ever used.
+3. **Disconnect** revokes access at once. Tools of an OAuth MCP backend are
+   read with a linked user's token (**Refresh tools**), since listing them
+   needs one.
+
+`scripts/mock_oauth_backend.py` is a backend with its own auth server to try
+this against: `uv run python scripts/mock_oauth_backend.py --port 18095`,
+register `http://127.0.0.1:18095` with the spec at `/openapi.json` in OAuth
+mode, Discover, publish, Connect account, then call `items_api_listMyItems`
+through the gateway and see the signed-in user's items.
 
 ### Bearer tokens everywhere
 
@@ -398,6 +433,9 @@ uv run pytest
   signed JWTs from Bizplay's identity provider, verified by key (FastMCP's
   `JWTVerifier` / `RemoteAuthProvider`), and hashed storage for any API keys.
 - **Portal accounts are demo accounts** with plain-text passwords and in-file sessions.
+- **Linked-account tokens live in the JSON state file**, next to the other
+  secrets. Production keeps per-user OAuth tokens in a vault and lets end
+  users link accounts from their own login, not only from the admin portal.
 - **Over stdio there is no bearer check.** Claude Desktop launches the server as
   a local process, so the identity comes from `BIZPLAY_USER_ID`.
 - **Compliance rules are simplified demo values.** They are not tax advice and

@@ -71,6 +71,9 @@ def _seed_state() -> dict:
             }
         },
         "agent_tokens": {},
+        # Per-user OAuth tokens for backends in "oauth" mode: user id -> provider id -> tokens.
+        "user_connections": {},
+        "oauth_pending": {},
         "security": {
             # The address agents use, when it differs from what this server
             # listens on (a tunnel, or nginx with a certificate in front).
@@ -89,6 +92,7 @@ AUTH_MODES = {
     "bearer": "Bearer token: the gateway sends a service token; the API rejects anonymous calls.",
     "network": "Network-isolated: the API has no token but is reachable only from the gateway's address.",
     "open": "Open: the API accepts anonymous calls. Demo data only; recorded as an accepted risk.",
+    "oauth": "OAuth: each user links their own account; the gateway sends that user's token.",
 }
 
 KINDS = {
@@ -149,7 +153,11 @@ def load() -> dict:
             state = _seed_state()
             save(state)
             return state
-        return json.loads(path.read_text(encoding="utf-8"))
+        state = json.loads(path.read_text(encoding="utf-8"))
+        # State files written before these sections existed.
+        state.setdefault("user_connections", {})
+        state.setdefault("oauth_pending", {})
+        return state
 
 
 def save(state: dict) -> None:

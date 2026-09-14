@@ -95,7 +95,7 @@ def as_company(monkeypatch):
 
 def gateway():
     return build_registry_gateway(transport_factory=lambda p: httpx2.ASGITransport(app=open_api),
-                                  mcp_client_factory=lambda p: ProxyClient(backend))
+                                  mcp_client_factory=lambda p, headers: ProxyClient(backend))
 
 
 # --- kind "mcp" -------------------------------------------------------------------------

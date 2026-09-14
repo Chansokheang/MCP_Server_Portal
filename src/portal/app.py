@@ -28,11 +28,11 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from bizplay_mcp import audit, policy_store, specs
+from bizplay_mcp import audit, oauth, policy_store, specs
 from bizplay_mcp.registry_gateway import build_registry_asgi
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -127,6 +127,8 @@ async def config(request: Request):
         # a proxy in front may not forward the host name it was reached on.
         "default_mcp_url": _default_endpoint(policy_store.load(), request),
         "public_mcp_url": policy_store.load()["security"].get("public_mcp_url", "").strip(),
+        # Where backends' auth servers send users back after they sign in.
+        "oauth_redirect_uri": _redirect_uri(request),
         # When false, the gateways accept anonymous HTTP callers (demo only).
         "require_agent_token": bool(policy_store.load()["security"]["require_gateway_bearer"]),
     })
@@ -185,6 +187,10 @@ def _public_provider(p: dict) -> dict:
     out.setdefault("auth_mode", "bearer")
     out.setdefault("kind", "openapi")
     out.setdefault("standalone", False)
+    cfg = p.get("oauth") or {}
+    out["oauth"] = {k: v for k, v in cfg.items() if k != "client_secret"} | {"has_client_secret": bool(cfg.get("client_secret"))}
+    out["oauth_ready"] = _oauth_ready(p)
+    out["connections"] = len(oauth.public_connections(policy_store.load(), p["id"])) if p.get("auth_mode") == "oauth" else 0
     out["has_spec"] = bool(p.get("spec"))
     out["standalone_url"] = policy_store.standalone_url(p)
     out["tool_count"] = len(p["tools"])
@@ -214,9 +220,43 @@ def _default_endpoint(state: dict, request: Request) -> str:
     return state["security"].get("public_mcp_url", "").strip() or _origin(request) + "/mcp"
 
 
+def _redirect_uri(request: Request) -> str:
+    return _origin(request) + "/oauth/callback"
+
+
+OAUTH_FIELDS = ("authorization_url", "token_url", "client_id", "client_secret", "scopes", "registration_url", "resource")
+
+
+def _oauth_config(body: dict, existing: dict | None = None) -> dict:
+    """Merge OAuth settings from a request into the stored ones; blank values keep what was there."""
+    cfg = dict(existing or {})
+    for key in OAUTH_FIELDS:
+        value = (body.get(key) or "").strip()
+        if value:
+            cfg[key] = value
+    for key in ("authorization_url", "token_url", "registration_url"):
+        if cfg.get(key) and not cfg[key].startswith("http"):
+            raise ApiError(400, f"{key} must start with http")
+    return cfg
+
+
+def _oauth_ready(p: dict) -> bool:
+    cfg = p.get("oauth") or {}
+    return bool(cfg.get("authorization_url") and cfg.get("token_url") and cfg.get("client_id"))
+
+
 def mcp_client(url: str, headers: dict[str, str]) -> Client:
     """Client for an MCP server being registered. Tests swap this for an in-memory one."""
     return Client(specs.mcp_transport(url, headers), timeout=15)
+
+
+def _backend_headers(state: dict, p: dict, user_id: str | None = None) -> dict[str, str]:
+    """Headers the portal itself uses to talk to a backend (tests, tool refresh)."""
+    if p.get("auth_mode") == "oauth":
+        record = oauth.connection(state, p["id"], user_id) if user_id else None
+        token = record["access_token"] if record else oauth.any_token(state, p["id"])
+        return {"Authorization": f"Bearer {token}"} if token else {}
+    return _upstream_headers(state, p)
 
 
 async def _tools_from_mcp_server(url: str, headers: dict[str, str]) -> dict:
@@ -266,10 +306,17 @@ async def register_provider(request: Request):
 
     base_note = ""
     spec = None
+    oauth_cfg = _oauth_config(body.get("oauth") or {}) if auth_mode == "oauth" else {}
     if kind == "mcp":
         # An MCP server that already exists: its own tool list is the policy table.
-        headers = {"Authorization": f"Bearer {service_token}"} if auth_mode == "bearer" and service_token else {}
-        tools = await _tools_from_mcp_server(base_url, headers)
+        # In OAuth mode nobody has linked an account yet, so the list waits for
+        # the first connection (Refresh tools on the provider page).
+        if auth_mode == "oauth":
+            tools = {}
+            base_note = "OAuth backend: connect an account, then Refresh tools to load its tool list."
+        else:
+            headers = {"Authorization": f"Bearer {service_token}"} if auth_mode == "bearer" and service_token else {}
+            tools = await _tools_from_mcp_server(base_url, headers)
         spec_source = "MCP server"
     else:
         spec = body.get("spec")
@@ -300,7 +347,7 @@ async def register_provider(request: Request):
     state["providers"][pid] = {
         "id": pid, "name": name, "owner": request.state.user, "kind": kind, "base_url": base_url,
         "spec_source": spec_source, "spec": spec,
-        "mcp_url": mcp_url, "standalone": False,
+        "mcp_url": mcp_url, "standalone": False, "oauth": oauth_cfg,
         "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},
@@ -324,11 +371,12 @@ async def update_provider(request: Request):
             raise ApiError(400, "base_url must start with http")
         p["base_url"], note = _normalize_base_url(base_url, p.get("spec") or {})
         # A moved MCP server may expose a different tool list; refresh it, keeping policy.
-        if p.get("kind") == "mcp":
-            fresh = await _tools_from_mcp_server(p["base_url"], _upstream_headers(state, p))
-            p["tools"] = {n: {**row, **{k: p["tools"][n][k] for k in ("enabled", "roles", "confirm")}} if n in p["tools"] else row
-                          for n, row in fresh.items()}
+        if p.get("kind") == "mcp" and (p.get("auth_mode") != "oauth" or oauth.any_token(state, p["id"])):
+            fresh = await _tools_from_mcp_server(p["base_url"], _backend_headers(state, p))
+            _merge_tools(p, fresh)
             note = f"Tool list refreshed: {len(fresh)} tool(s)."
+    if "oauth" in body and isinstance(body["oauth"], dict):
+        p["oauth"] = _oauth_config(body["oauth"], p.get("oauth"))
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
         # One gateway, one public address: remember it for the next registration.
@@ -365,6 +413,22 @@ def _upstream_headers(state: dict, p: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {secret}"} if p.get("auth_mode", "bearer") == "bearer" and secret else {}
 
 
+def _merge_tools(p: dict, fresh: dict) -> None:
+    """Replace the tool table with a fresh one, keeping enable/role/confirm choices."""
+    p["tools"] = {n: {**row, **{k: p["tools"][n][k] for k in ("enabled", "roles", "confirm")}} if n in p["tools"] else row
+                  for n, row in fresh.items()}
+
+
+def _publish_gate(state: dict, p: dict) -> None:
+    mode = p.get("auth_mode", "bearer")
+    if mode == "bearer" and not state["credentials"][p["upstream_credential_id"]]["secret"]:
+        raise ApiError(409, "bearer mode: add an upstream service token before publishing")
+    if mode == "network" and not p.get("allowlist"):
+        raise ApiError(409, "network mode: record the allowlisted gateway address before publishing")
+    if mode == "oauth" and not _oauth_ready(p):
+        raise ApiError(409, "OAuth mode: set the authorization URL, token URL and client id (or use Discover) before publishing")
+
+
 async def set_provider_status(request: Request):
     """publish / unpublish on the shared gateway; deploy / undeploy the standalone endpoint."""
     state = policy_store.load()
@@ -372,11 +436,8 @@ async def set_provider_status(request: Request):
     action = request.path_params["action"]
     if action not in ("publish", "unpublish", "deploy", "undeploy"):
         raise ApiError(400, "action must be publish, unpublish, deploy or undeploy")
-    mode = p.get("auth_mode", "bearer")
-    if action in ("publish", "deploy") and mode == "bearer" and not state["credentials"][p["upstream_credential_id"]]["secret"]:
-        raise ApiError(409, "bearer mode: add an upstream service token before publishing")
-    if action in ("publish", "deploy") and mode == "network" and not p.get("allowlist"):
-        raise ApiError(409, "network mode: record the allowlisted gateway address before publishing")
+    if action in ("publish", "deploy"):
+        _publish_gate(state, p)
     if action == "deploy" and not (p.get("spec") or p.get("kind") == "mcp"):
         raise ApiError(409, "the curated Bizplay provider is already its own server; deploy applies to registered APIs")
     if action in ("publish", "unpublish"):
@@ -406,8 +467,17 @@ async def delete_provider(request: Request):
 async def _test_mcp_server(state: dict, p: dict) -> list[dict]:
     """An MCP backend passes when it completes the handshake and lists its tools."""
     results = []
+    if p.get("auth_mode") == "oauth":
+        results.append({"check": "OAuth configuration", "path": (p.get("oauth") or {}).get("authorization_url", ""),
+                        "status": None, "ok": _oauth_ready(p),
+                        "note": "authorization URL, token URL and client id set" if _oauth_ready(p)
+                        else "incomplete: use Discover or fill the fields under Edit connection"})
+        if not oauth.any_token(state, p["id"]):
+            results.append({"check": "A linked account to test with", "path": "Connect account", "status": None, "ok": False,
+                            "error": "no user has connected an account yet, so the server cannot be called"})
+            return results
     try:
-        async with mcp_client(p["base_url"], _upstream_headers(state, p)) as c:  # entering = initialize handshake
+        async with mcp_client(p["base_url"], _backend_headers(state, p)) as c:  # entering = initialize handshake
             results.append({"check": "MCP server answers initialize", "path": p["base_url"], "status": "ok", "ok": True})
             listed = await c.list_tools()
             known = set(p["tools"])
@@ -420,8 +490,8 @@ async def _test_mcp_server(state: dict, p: dict) -> list[dict]:
                         "error": str(exc)[:160]})
     mode = p.get("auth_mode", "bearer")
     results.append({"check": "Upstream credential", "path": p["base_url"], "status": None, "ok": True,
-                    "note": "the stored service token is sent as a bearer header" if mode == "bearer"
-                    else f"none sent in {mode} mode"})
+                    "note": {"bearer": "the stored service token is sent as a bearer header",
+                             "oauth": "each caller's own linked token is sent"}.get(mode, f"none sent in {mode} mode")})
     return results
 
 
@@ -464,6 +534,15 @@ async def test_provider(request: Request):
         if mode == "bearer":
             results.append({"check": "Protected endpoint rejects missing token", **anon,
                             "ok": anon["status"] in (401, 403)})
+        elif mode == "oauth":
+            results.append({"check": "Protected endpoint rejects missing token", **anon,
+                            "ok": anon["status"] in (401, 403),
+                            "note": "each caller's own linked token is sent at call time"})
+            results.append({"check": "OAuth configuration", "path": (p.get("oauth") or {}).get("token_url", ""),
+                            "status": None, "ok": _oauth_ready(p),
+                            "note": "authorization URL, token URL and client id set" if _oauth_ready(p)
+                            else "incomplete: fill the fields under Edit connection"})
+            return JSONResponse({"provider": p["id"], "results": results, "ok": all(r["ok"] for r in results)})
         elif mode == "network":
             results.append({"check": "Anonymous call from the gateway host succeeds (network mode)", **anon,
                             "ok": anon["status"] == 200,
@@ -489,6 +568,104 @@ async def test_provider(request: Request):
                 results.append({"check": "Protected endpoint accepts service token", "path": probe_path,
                                 "status": None, "ok": False, "error": str(exc)[:120]})
     return JSONResponse({"provider": p["id"], "results": results, "ok": all(r["ok"] for r in results)})
+
+
+# --- per-user OAuth: link accounts on backends that want the user's own token --------
+async def oauth_discover(request: Request):
+    """Read the backend's auth metadata and, when it allows it, register the gateway as a client."""
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    body = await request.json() if request.headers.get("content-length", "0") not in ("", "0") else {}
+    url = (body.get("url") or p["base_url"]).strip()
+    try:
+        found = await oauth.discover(url)
+    except (oauth.OAuthError, httpx.HTTPError) as exc:
+        raise ApiError(502, str(exc)[:200]) from None
+    cfg = dict(p.get("oauth") or {})
+    for key in ("authorization_url", "token_url", "registration_url", "resource"):
+        if found.get(key):
+            cfg[key] = found[key]
+    if found.get("scopes") and not cfg.get("scopes"):
+        cfg["scopes"] = found["scopes"]
+    registered = False
+    if not cfg.get("client_id") and cfg.get("registration_url"):
+        try:
+            cfg.update(await oauth.register_client(cfg["registration_url"], _redirect_uri(request), "Bizplay MCP Gateway"))
+            registered = True
+        except (oauth.OAuthError, httpx.HTTPError) as exc:
+            raise ApiError(502, f"metadata found but client registration failed: {str(exc)[:160]}") from None
+    p["oauth"] = cfg
+    if p.get("auth_mode") != "oauth":
+        p["auth_mode"] = "oauth"
+    policy_store.save(state)
+    return JSONResponse({**_public_provider(p), "registered_client": registered, "redirect_uri": _redirect_uri(request),
+                         "note": ("Client registered with the auth server." if registered else
+                                  "Endpoints found." + ("" if cfg.get("client_id") else " The server offers no dynamic registration: enter the client id it gave you."))})
+
+
+async def oauth_start(request: Request):
+    """Begin linking one user's account: returns the URL to open."""
+    body = await request.json()
+    user_id = (body.get("user_id") or "").strip()
+    if not user_id:
+        raise ApiError(400, "user_id is required: the Bizplay user whose account is being linked")
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    if p.get("auth_mode") != "oauth":
+        raise ApiError(409, "this backend is not in OAuth mode")
+    try:
+        url = oauth.start(state, p, user_id, _redirect_uri(request))
+    except oauth.OAuthError as exc:
+        raise ApiError(409, str(exc)) from None
+    policy_store.save(state)
+    return JSONResponse({"authorization_url": url, "redirect_uri": _redirect_uri(request), "user_id": user_id})
+
+
+async def oauth_callback(request: Request):
+    """Where the backend's auth server sends the user back. No portal session: the state nonce is the proof."""
+    q = request.query_params
+    state = policy_store.load()
+    if q.get("error"):
+        return RedirectResponse(f"/#registry?oauth_error={q.get('error_description') or q['error']}", status_code=303)
+    try:
+        provider, pending = await oauth.finish(state, q.get("state", ""), q.get("code", ""))
+    except (oauth.OAuthError, httpx.HTTPError) as exc:
+        policy_store.save(state)
+        return RedirectResponse(f"/#registry?oauth_error={str(exc)[:160]}", status_code=303)
+    policy_store.save(state)
+    audit.record(pending["user_id"], f"oauth:{provider['id']}", {}, "ok", "account linked", via="portal")
+    return RedirectResponse(f"/#provider?p={provider['id']}&connected={pending['user_id']}", status_code=303)
+
+
+async def list_connections(request: Request):
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    return JSONResponse({"provider": p["id"], "items": oauth.public_connections(state, p["id"]), "now": time.time()})
+
+
+async def delete_connection(request: Request):
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    if not oauth.disconnect(state, p["id"], request.path_params["user_id"]):
+        raise ApiError(404, "no linked account for that user")
+    policy_store.save(state)
+    return JSONResponse({"ok": True})
+
+
+async def refresh_tools(request: Request):
+    """Re-read an MCP backend's tool list, with a linked user's token when it needs one."""
+    body = await request.json() if request.headers.get("content-length", "0") not in ("", "0") else {}
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    if p.get("kind") != "mcp":
+        raise ApiError(409, "only MCP backends can refresh their tool list; re-register a REST API with a new spec")
+    headers = _backend_headers(state, p, (body.get("user_id") or "").strip() or None)
+    if p.get("auth_mode") == "oauth" and not headers:
+        raise ApiError(409, "connect an account first: the server needs a user's token to list its tools")
+    fresh = await _tools_from_mcp_server(p["base_url"], headers)
+    _merge_tools(p, fresh)
+    policy_store.save(state)
+    return JSONResponse({**_public_provider(p), "note": f"Tool list refreshed: {len(fresh)} tool(s)."})
 
 
 # --- tools / access control -----------------------------------------------------
@@ -631,7 +808,13 @@ app = Starlette(
         Route("/api/registry/{pid}/test", test_provider, methods=["POST"]),
         Route("/api/registry/{pid}/tools", list_tools),
         Route("/api/registry/{pid}/tools/{name}", update_tool, methods=["PUT"]),
+        Route("/api/registry/{pid}/oauth/discover", oauth_discover, methods=["POST"]),
+        Route("/api/registry/{pid}/oauth/start", oauth_start, methods=["POST"]),
+        Route("/api/registry/{pid}/connections", list_connections),
+        Route("/api/registry/{pid}/connections/{user_id}", delete_connection, methods=["DELETE"]),
+        Route("/api/registry/{pid}/refresh-tools", refresh_tools, methods=["POST"]),
         Route("/api/registry/{pid}/{action}", set_provider_status, methods=["POST"]),
+        Route("/oauth/callback", oauth_callback),
         Route("/api/tokens", list_tokens),
         Route("/api/tokens", issue_token, methods=["POST"]),
         Route("/api/tokens/{tid}/revoke", revoke_token, methods=["POST"]),

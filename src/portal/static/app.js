@@ -91,7 +91,24 @@ const chip = (kind, text, icon) => `<span class="chip ${kind}">${icon ? `<i clas
 const tile = (icon, k, v, mono = false) => `<div class="tile"><span class="k"><i class="ph ph-${icon}"></i>${esc(k)}</span><span class="v ${mono ? "mono" : ""}">${esc(v)}</span></div>`;
 const LOGO_COLORS = ["green", "lilac", "amber", "dark", "red"];
 const logo = (name, i = 0) => `<span class="logo ${LOGO_COLORS[i % LOGO_COLORS.length]}">${esc(initials(name))}</span>`;
-const authChip = (m) => ({ bearer: chip("lilac", "Bearer", "key"), network: chip("amber", "Network", "shield-check"), open: chip("red", "Open", "warning") }[m] || chip("lilac", "Bearer", "key"));
+const authChip = (m) => ({ bearer: chip("lilac", "Bearer", "key"), network: chip("amber", "Network", "shield-check"), open: chip("red", "Open", "warning"), oauth: chip("green", "OAuth per user", "user-circle") }[m] || chip("lilac", "Bearer", "key"));
+// Fields for a backend whose users link their own accounts. Shared by the register and edit dialogs.
+const oauthFields = (prefix, cfg = {}) => `
+  <div class="form-2">
+    <label class="field">Authorization URL <input name="oauth.authorization_url" value="${esc(cfg.authorization_url || "")}" placeholder="https://auth.example.com/authorize"></label>
+    <label class="field">Token URL <input name="oauth.token_url" value="${esc(cfg.token_url || "")}" placeholder="https://auth.example.com/token"></label>
+    <label class="field">Client id <input name="oauth.client_id" value="${esc(cfg.client_id || "")}" placeholder="issued by the auth server"></label>
+    <label class="field">Client secret <input name="oauth.client_secret" placeholder="${cfg.has_client_secret ? "stored, leave blank to keep" : "if the auth server issued one"}"></label>
+    <label class="field">Scopes <input name="oauth.scopes" value="${esc(cfg.scopes || "")}" placeholder="space separated, e.g. tasks:read"></label>
+    <label class="field">Resource (RFC 8707) <input name="oauth.resource" value="${esc(cfg.resource || "")}" placeholder="MCP servers: their own URL"></label>
+  </div>
+  <div class="callout"><i class="ph ph-info"></i><span>Register this redirect URL with the auth server: <span class="mono">${esc(SERVER.oauth_redirect_uri || (location.origin + "/oauth/callback"))}</span>. MCP servers that publish their auth metadata can fill all of this in with <strong>Discover</strong> on the provider page, and register the gateway as a client by themselves.</span></div>`;
+/** Pull "oauth.x" fields out of a form into {oauth: {x}}. */
+function splitOauth(f) {
+  const oauth = {};
+  for (const [k, v] of Object.entries(f)) if (k.startsWith("oauth.")) { oauth[k.slice(6)] = v; delete f[k]; }
+  return { ...f, oauth };
+}
 const kindChip = (k) => k === "mcp" ? chip("green", "MCP server", "plugs-connected") : chip("", "REST API", "cloud");
 const standaloneChip = (p) => p.standalone ? chip("green", "Deployed", "rocket-launch") : "";
 const statusChip = (s) => s === "published" ? chip("green", "Published", "check") : chip("", "Draft", "pencil-simple");
@@ -270,9 +287,11 @@ async function registerDialog() {
           <option value="bearer">Bearer token: it rejects anonymous calls (recommended)</option>
           <option value="network">Network-isolated: no token, only the gateway's address can reach it</option>
           <option value="open">Open: anyone can call it (demo data only, recorded as accepted risk)</option>
+          <option value="oauth">OAuth: each user links their own account; the gateway sends that user's token</option>
         </select></label>
       <label class="field" id="reg-token-field">Service bearer token the gateway will send <input name="service_token" placeholder="issued by the provider (stored, never shown again)"></label>
       <label class="field hidden" id="reg-allowlist-field">Gateway address the API allows <input name="allowlist" placeholder="e.g. 203.0.113.10 or 10.0.0.0/24"></label>
+      <div class="hidden" id="reg-oauth-fields">${oauthFields("reg")}</div>
       <div class="callout warn hidden" id="reg-open-warning"><i class="ph ph-warning"></i><span><strong>Open backend.</strong> The gateway still authenticates agents, applies tool policy, and limits results to the caller's company, but anyone who knows the URL can bypass it. The overview will show this as an accepted risk.</span></div>
       <label class="field" id="reg-spec-field">OpenAPI spec (JSON) <textarea name="spec" placeholder='{"openapi":"3.0.3","paths":{...}}' required></textarea></label>
       <div class="callout hidden" id="reg-mcp-note"><i class="ph ph-info"></i><span>The portal connects to the server now and reads its tool list. Tools marked read-only by the server start enabled; the rest start off and can be switched on under Access Control.</span></div>
@@ -299,6 +318,7 @@ async function registerDialog() {
     $("#reg-token-field").classList.toggle("hidden", m !== "bearer");
     $("#reg-allowlist-field").classList.toggle("hidden", m !== "network");
     $("#reg-open-warning").classList.toggle("hidden", m !== "open");
+    $("#reg-oauth-fields").classList.toggle("hidden", m !== "oauth");
   };
   $("#reg-sample").onclick = async () => {
     const r = await fetch("/static/sample-openapi.json"); $("#reg-form [name=spec]").value = await r.text();
@@ -307,12 +327,18 @@ async function registerDialog() {
     $("#reg-form [name=service_token]").value ||= "demo-service-token";
   };
   $("#reg-form").onsubmit = async (e) => {
-    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    e.preventDefault(); const f = splitOauth(Object.fromEntries(new FormData(e.target)));
     const btn = $("#reg-submit"); btn.disabled = true;
     if (f.kind === "mcp") { delete f.spec; btn.innerHTML = `<i class="ph ph-circle-notch"></i> Reading tools from the server`; }
     try {
       const p = await api("POST", "/api/registry", { ...f, spec_source: "uploaded" });
       toast("Registered as draft", p.kind === "mcp" ? `${p.tool_count} tools read from the MCP server` : `${p.tool_count} tools generated from the spec`);
+      if (p.auth_mode === "oauth" && !p.oauth_ready) {
+        // Try the server's own metadata before asking anyone to type endpoints.
+        try { const d = await api("POST", `/api/registry/${p.id}/oauth/discover`, {}); toast("OAuth endpoints discovered", d.note, 5000); }
+        catch (err) { toast("Fill the OAuth endpoints under Edit connection", err.message, 6000); }
+        closeModal(); setHash("provider", { p: p.id }); return;
+      }
       testDialog(p.id);  // prove the connection now, while the details are fresh
     } catch (err) { $("#reg-error").textContent = err.message; btn.disabled = false; btn.innerHTML = `<i class="ph ph-check"></i> Register as draft`; }
   };
@@ -381,9 +407,11 @@ async function editDialog(p) {
           ${opt("bearer", "Bearer token: the API rejects anonymous calls")}
           ${opt("network", "Network-isolated: no token, only the gateway's address can reach it")}
           ${opt("open", "Open: anyone can call it (demo data only, recorded as accepted risk)")}
+          ${opt("oauth", "OAuth: each user links their own account; the gateway sends that user's token")}
         </select></label>
       <label class="field ${p.auth_mode === "bearer" ? "" : "hidden"}" id="ed-token-field">Service bearer token <input name="service_token" placeholder="leave blank to keep the stored one"></label>
       <label class="field ${p.auth_mode === "network" ? "" : "hidden"}" id="ed-allowlist-field">Gateway address the API allows <input name="allowlist" value="${esc(p.allowlist || "")}" placeholder="e.g. 203.0.113.10"></label>
+      <div class="${p.auth_mode === "oauth" ? "" : "hidden"}" id="ed-oauth-fields">${oauthFields("ed", p.oauth || {})}</div>
       <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="ed-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Save</button></div>
       <p class="error" id="ed-error"></p>
     </form>`);
@@ -391,9 +419,10 @@ async function editDialog(p) {
   $("#ed-mode").onchange = (e) => {
     $("#ed-token-field").classList.toggle("hidden", e.target.value !== "bearer");
     $("#ed-allowlist-field").classList.toggle("hidden", e.target.value !== "network");
+    $("#ed-oauth-fields").classList.toggle("hidden", e.target.value !== "oauth");
   };
   $("#ed-form").onsubmit = async (e) => {
-    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    e.preventDefault(); const f = splitOauth(Object.fromEntries(new FormData(e.target)));
     try {
       const r = await api("PATCH", `/api/registry/${p.id}`, f);
       closeModal(); toast("Connection updated", r.note || `${r.name} now points at ${r.base_url}`, r.note ? 6000 : 3000);
@@ -674,8 +703,61 @@ function clientGuides(p, tools, via) {
   };
 }
 
+/** Link one user's account on an OAuth backend: the auth server opens in a new tab and sends the user back here. */
+async function connectDialog(p) {
+  modal(`<h2><i class="ph ph-user-circle-plus"></i> Connect an account on ${esc(p.name)}</h2>
+    <p class="muted">The user signs in at ${esc(hostOf(p.oauth?.authorization_url) || "the backend's auth server")} in a new tab. Their tokens are kept by the gateway and used only for their own calls.</p>
+    <form id="cn-form" class="form">
+      <label class="field">Bizplay user id this account belongs to <input name="user_id" value="emp001" required>
+        <span class="muted small">The identity agents call with: the user id on the agent token, or BIZPLAY_USER_ID when tokens are off.</span></label>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="cn-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-arrow-square-out"></i> Open sign-in</button></div>
+      <p class="error" id="cn-error"></p>
+    </form>`);
+  $("#cn-cancel").onclick = closeModal;
+  $("#cn-form").onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    try {
+      const r = await api("POST", `/api/registry/${p.id}/oauth/start`, f);
+      const win = window.open(r.authorization_url, "_blank");
+      modal(`<h2><i class="ph ph-hourglass"></i> Waiting for ${esc(f.user_id)} to sign in</h2>
+        <p class="muted">A sign-in tab was opened. When it finishes, it returns to this portal and the account appears under Connected accounts.</p>
+        ${win ? "" : `<p class="error">The browser blocked the pop-up. Open this address instead:</p>${codeBlock("cn-url", r.authorization_url)}`}
+        <div style="display:flex;justify-content:flex-end"><button class="btn" id="cn-done">Close</button></div>`);
+      $("#cn-done").onclick = () => { closeModal(); pages.provider(); };
+    } catch (err) { $("#cn-error").textContent = err.message; }
+  };
+}
+
+/** The Connected accounts card for an OAuth backend. */
+function connectionsCard(p, conns) {
+  const cfg = p.oauth || {};
+  return `
+    <div class="card">
+      <div class="card-head">
+        <span class="card-brand"><span class="logo ${p.oauth_ready ? "green" : "amber"}"><i class="ph ph-user-circle"></i></span> Connected accounts</span>
+        ${p.oauth_ready ? chip("green", "Auth server configured", "check") : chip("amber", "Auth server not configured", "warning")}
+      </div>
+      <div class="tiles" style="grid-template-columns:2fr 1fr 1fr">
+        ${tile("globe", "Auth server", hostOf(cfg.authorization_url) || "not set", true)}
+        ${tile("identification-card", "Client id", cfg.client_id || "not set", true)}
+        ${tile("users", "Linked users", String(conns.length))}
+      </div>
+      <p class="card-desc" style="-webkit-line-clamp:4">This backend wants each user's own token from its auth server. The AI client never sees that server: a user links their account here once, the gateway keeps the refresh token and attaches the right access token to that user's calls. A caller without a linked account gets a message telling them to connect it.</p>
+      ${conns.length ? `<div class="table-wrap"><table><tr><th>User</th><th>Linked</th><th>Token expires</th><th>Scope</th><th></th></tr>
+        ${conns.map((c) => `<tr><td class="mono">${esc(c.user_id)}</td><td class="small">${esc(fmtTs(c.connected_at))}</td><td class="small">${c.expires_at ? esc(fmtTs(c.expires_at)) + (c.can_refresh ? " (auto-refresh)" : "") : "never"}</td><td class="small mono">${esc(c.scope || "")}</td><td><button class="btn small danger" data-disconnect="${esc(c.user_id)}"><i class="ph ph-link-break"></i> Disconnect</button></td></tr>`).join("")}
+        </table></div>` : `<p class="muted small">No accounts linked yet.</p>`}
+      <div class="card-actions">
+        <button class="btn small solid" data-act="connect" ${p.oauth_ready ? "" : "disabled"}><i class="ph ph-user-circle-plus"></i> Connect account</button>
+        <button class="btn small" data-act="discover"><i class="ph ph-magnifying-glass"></i> ${cfg.client_id ? "Re-discover endpoints" : "Discover and register client"}</button>
+        ${p.kind === "mcp" ? `<button class="btn small" data-act="refresh-tools" ${conns.length ? "" : "disabled"}><i class="ph ph-arrows-clockwise"></i> Refresh tools</button>` : ""}
+      </div>
+    </div>`;
+}
+
 pages.provider = async () => {
   const pid = hashParam("p");
+  if (hashParam("connected")) { toast("Account linked", `${hashParam("connected")} can now use this backend`, 5000); setHash("provider", { p: pid }); return; }
+  if (hashParam("oauth_error")) { toast("Sign-in failed", hashParam("oauth_error"), 7000); setHash("provider", { p: pid }); return; }
   const reg = await api("GET", "/api/registry");
   const p = reg.items.find((x) => x.id === pid);
   if (!p) {
@@ -684,6 +766,7 @@ pages.provider = async () => {
     return;
   }
   const d = await api("GET", `/api/registry/${pid}/tools`);
+  const conns = p.auth_mode === "oauth" ? (await api("GET", `/api/registry/${pid}/connections`)).items : [];
   const tools = d.items, enabled = tools.filter((t) => t.enabled);
   const via = connectVia(p);
   const guides = clientGuides(p, tools, via);
@@ -712,7 +795,7 @@ pages.provider = async () => {
         ${tile("plug", "Tools", `${p.tools_enabled} of ${p.tool_count} enabled`)}
         ${tile("textbox", "Tool names", p.tool_prefix ? `${p.tool_prefix}*` : "no prefix")}
       </div>
-      <p class="card-desc" style="-webkit-line-clamp:3">${p.kind === "mcp" ? "Tools proxied from the MCP server, unchanged" : `Spec from ${esc(p.spec_source)}`}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : "The gateway sends a stored service token on every call."}</p>
+      <p class="card-desc" style="-webkit-line-clamp:3">${p.kind === "mcp" ? "Tools proxied from the MCP server, unchanged" : `Spec from ${esc(p.spec_source)}`}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : p.auth_mode === "oauth" ? `Each caller's own linked account token is sent; ${conns.length} user(s) linked.` : "The gateway sends a stored service token on every call."}</p>
       <div class="card-actions">
         <button class="btn small solid" data-act="command"><i class="ph ph-terminal-window"></i> Connect command</button>
         <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit connection</button>
@@ -724,6 +807,7 @@ pages.provider = async () => {
       </div>
     </div>
     ${LOCAL_HOST.test(hostOf(p.mcp_url)) && !LOCAL_HOST.test(location.hostname) ? `<div class="callout warn"><i class="ph ph-warning"></i><span><strong>Other machines cannot reach this endpoint.</strong> It points at ${esc(hostOf(p.mcp_url))}, which only resolves on the server itself. Use Edit connection and set it to <span class="mono">${esc(location.origin)}/mcp</span>, or set PUBLIC_HOST in the server's .env file.</span></div>` : ""}
+    ${p.auth_mode === "oauth" ? connectionsCard(p, conns) : ""}
     ${canDeploy ? `
     <div class="card deploy ${p.standalone ? "on" : ""}">
       <div class="card-head">
@@ -768,6 +852,11 @@ pages.provider = async () => {
   $("#page").querySelectorAll("[name=via]").forEach((r) => r.onchange = () => {
     setHash("provider", { p: pid, c: key, ...(r.value === "standalone" ? { via: "standalone" } : {}) }); pages.provider();
   });
+  $("#page").querySelectorAll("[data-disconnect]").forEach((b) => b.onclick = async () => {
+    if (!confirm(`Disconnect ${b.dataset.disconnect}? Their calls to ${p.name} are refused until they link the account again.`)) return;
+    try { await api("DELETE", `/api/registry/${pid}/connections/${b.dataset.disconnect}`); toast("Account disconnected", b.dataset.disconnect); pages.provider(); }
+    catch (err) { toast("Disconnect failed", err.message, 4500); }
+  });
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     const act = b.dataset.act;
     try {
@@ -775,6 +864,16 @@ pages.provider = async () => {
       if (act === "command") return commandDialog(p, via);
       if (act === "edit") return editDialog(p);
       if (act === "test") return testDialog(pid);
+      if (act === "connect") return connectDialog(p);
+      if (act === "discover") {
+        b.disabled = true;
+        const r = await api("POST", `/api/registry/${pid}/oauth/discover`, {});
+        toast(r.registered_client ? "Client registered" : "Endpoints discovered", r.note, 6000); pages.provider(); return;
+      }
+      if (act === "refresh-tools") {
+        const r = await api("POST", `/api/registry/${pid}/refresh-tools`, { user_id: conns[0]?.user_id });
+        toast("Tools refreshed", r.note); pages.provider(); return;
+      }
       if (act === "delete") {
         if (!confirm(`Delete ${p.name}?`)) return;
         await api("DELETE", `/api/registry/${pid}`); toast("Provider deleted", p.name); location.hash = "registry"; return;
