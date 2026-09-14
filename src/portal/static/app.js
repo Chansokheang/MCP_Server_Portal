@@ -150,29 +150,57 @@ function enterApp() {
   api("GET", "/api/config").then((c) => { SERVER = c; }).catch(() => {});
   $("#whoami-avatar").textContent = initials(session.user.name);
   $("#whoami-name").textContent = session.user.name;
+  $("#whoami-sub").textContent = `DemoCorp01 / ${session.user.role}`;
   go(location.hash.replace("#", "") || "overview");
 }
 
 // ---- router ----
 const pages = {};
-const titles = { overview: "Overview", registry: "MCP Registry", provider: "API details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
-// Pages reached from another page keep that page's rail icon lit.
+const titles = { overview: "Overview", registry: "MCP Registry", provider: "Backend details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
+// Pages reached from another page keep that page's nav item lit.
 const RAIL_OF = { provider: "registry" };
 function hashParam(name) { return new URLSearchParams(location.hash.split("?")[1] || "").get(name); }
 function setHash(page, params) { const q = new URLSearchParams(params || {}).toString(); location.hash = q ? `${page}?${q}` : page; }
+/** Breadcrumb: Home / Section [/ Item]. */
+function crumbs(...trail) {
+  const items = [`<a data-page="overview"><i class="ph ph-house"></i> Home</a>`];
+  trail.forEach((t, i) => {
+    const last = i === trail.length - 1;
+    items.push(`<span class="sep">/</span>`, last ? `<span class="here">${esc(t.label)}</span>` : `<a data-page="${esc(t.page)}">${esc(t.label)}</a>`);
+  });
+  $("#crumbs").innerHTML = items.join("");
+  $("#crumbs").querySelectorAll("a").forEach((a) => a.onclick = () => go(a.dataset.page));
+}
+/** The one primary action for the page, top right. */
+function pageActions(html) { $("#page-actions").innerHTML = html || ""; }
 function go(page) {
   page = (page || "").split("?")[0];
   if (!pages[page]) page = "overview";
   if (location.hash.slice(1).split("?")[0] !== page) location.hash = page;
   const rail = RAIL_OF[page] || page;
-  document.querySelectorAll(".rail-nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === rail));
+  document.querySelectorAll(".side-nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === rail));
   $("#page-title").textContent = titles[page];
+  crumbs({ page, label: titles[page] });
+  pageActions("");
+  $("#global-search").value = "";
   $("#tabs").classList.add("hidden");
   $("#page").innerHTML = SKELETON;
   pages[page]().catch((err) => { $("#page").innerHTML = `<div class="card">${emptyState("warning-circle", "Could not load this page", esc(err.message))}<div style="text-align:center"><button class="btn" onclick="location.reload()">Retry</button></div></div>`; });
 }
-document.querySelectorAll(".rail-nav a").forEach((a) => a.addEventListener("click", () => go(a.dataset.page)));
+document.querySelectorAll(".side-nav a").forEach((a) => a.addEventListener("click", () => go(a.dataset.page)));
 window.addEventListener("hashchange", () => session && go(location.hash.slice(1).split("?")[0]));
+
+// Unified search: filters the rows and cards of whatever page is open. Ctrl+K focuses it.
+$("#global-search").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  $("#page").querySelectorAll("tbody tr, tr:not(:first-child), .cards > .card").forEach((el) => {
+    if (el.querySelector("th")) return;
+    el.style.display = !q || el.textContent.toLowerCase().includes(q) ? "" : "none";
+  });
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("#global-search").focus(); }
+});
 
 /** Re-run the current page's fetch, keeping the tab and provider you are on. */
 function refreshPage() {
@@ -229,37 +257,54 @@ pages.overview = async () => {
 pages.registry = async () => {
   const d = await api("GET", "/api/registry");
   const filter = hashParam("f") || "all";
-  const items = d.items.filter((p) => filter === "all" || p.status === filter);
+  const items = d.items.filter((p) => filter === "all" || (filter === "deployed" ? p.standalone : p.status === filter));
   renderTabs([
-    { key: "all", label: "All APIs", icon: "squares-four", count: d.items.length },
+    { key: "all", label: "All", icon: "squares-four", count: d.items.length },
     { key: "published", label: "Published", icon: "check-circle", count: d.items.filter((p) => p.status === "published").length },
-    { key: "draft", label: "Drafts", icon: "pencil-simple", count: d.items.filter((p) => p.status === "draft").length },
+    { key: "draft", label: "Draft", icon: "pencil-simple", count: d.items.filter((p) => p.status === "draft").length },
+    { key: "deployed", label: "Deployed as MCP server", icon: "rocket-launch", count: d.items.filter((p) => p.standalone).length },
   ], filter, (k) => { setHash("registry", { f: k }); pages.registry(); },
-  { title: "Registry live", sub: `${d.items.filter((p) => p.status === "published").length} API(s) reachable by agents` });
+  { title: "Registry live", sub: `${d.items.filter((p) => p.status === "published").length} backend(s) reachable by agents` });
 
+  pageActions(`<button class="btn solid" id="btn-register"><i class="ph ph-plus"></i> Register backend</button>`);
   $("#page").innerHTML = `
-    <div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
-        <h2 class="section-title" style="margin:0">Registered APIs</h2>
-        <button class="btn solid" id="btn-register"><i class="ph ph-plus"></i> Register API</button>
-      </div>
-      ${items.length ? `<div class="cards">${items.map((p, i) => `
-        <div class="card lift">
-          <div class="card-head"><span class="card-brand">${logo(p.name, i)} ${esc(p.name)}</span><span style="display:flex;gap:6px;flex-wrap:wrap">${standaloneChip(p)}${kindChip(p.kind)}${authChip(p.auth_mode)}</span></div>
-          <div class="tiles">${tile("plug", "Tools", `${p.tools_enabled} of ${p.tool_count} enabled`)}${tile("calendar-blank", "Registered", fmtDate(p.created_at))}</div>
-          <h3 class="card-title">${esc(p.base_url.replace(/^https?:\/\//, ""))}</h3>
-          <p class="card-desc">${p.standalone ? `Own MCP server at ${esc(p.standalone_url)}. Also on the gateway ${esc(p.mcp_url)}` : `On the gateway ${esc(p.mcp_url)}`}${p.tool_prefix ? `, tools named ${esc(p.tool_prefix)}*` : ""}. ${p.kind === "mcp" ? "Tools proxied from the MCP server" : `Spec from ${esc(p.spec_source)}`}. Owner ${esc(p.owner)}.</p>
-          <div class="card-actions">
-            <button class="btn small" data-act="detail" data-id="${esc(p.id)}"><i class="ph ph-info"></i> View details</button>
-            <button class="btn small solid" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> How to use it</button>
-            ${p.has_spec || p.kind === "mcp" ? `<button class="btn small" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy as MCP server"}</button>` : ""}
-          </div>
-        </div>`).join("")}</div>`
-      : `<div class="card">${emptyState("plugs-connected", "No APIs here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</div>`}
+    <div class="filter-bar">
+      <label>Type <select id="reg-filter-kind"><option value="">All</option><option value="openapi">REST API</option><option value="mcp">MCP server</option></select></label>
+      <label>Auth <select id="reg-filter-auth"><option value="">All</option><option value="bearer">Bearer</option><option value="oauth">OAuth per user</option><option value="network">Network</option><option value="open">Open</option></select></label>
+      <span class="grow"></span>
+      <span class="muted small">${items.length} backend(s). Type in the search box above to filter by name, URL or owner.</span>
     </div>
-    <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> puts a backend on the shared gateway endpoint, with this portal's tool policy enforced. <strong>Deployed</strong> additionally gives it an MCP server of its own at <span class="mono">/mcp/&lt;id&gt;</span>, with plain tool names, for teams that want one product per connector. Both take effect on the next request, no restart. Listing in public directories (official MCP Registry, Claude, Copilot Studio, Agentforce) is a separate step.</span></div>`;
+    <div class="table-card"><div class="table-wrap"><table id="registry-table">
+      <tr><th>Backend</th><th>Type</th><th>Auth</th><th>Status</th><th>Tools</th><th>Endpoint</th><th>Registered</th><th></th></tr>
+      ${items.length ? items.map((p, i) => `<tr class="row-link" data-kind="${esc(p.kind)}" data-auth="${esc(p.auth_mode)}" data-open="${esc(p.id)}">
+        <td><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub mono">${esc(p.base_url.replace(/^https?:\/\//, ""))}</div></span></span></td>
+        <td>${kindChip(p.kind)}</td>
+        <td>${authChip(p.auth_mode)}</td>
+        <td>${statusChip(p.status)} ${standaloneChip(p)}</td>
+        <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
+        <td class="mono small">${esc(p.standalone ? p.standalone_url : p.mcp_url)}${p.tool_prefix && !p.standalone ? `<div class="sub">tools ${esc(p.tool_prefix)}*</div>` : p.standalone ? `<div class="sub">own server, plain tool names</div>` : ""}</td>
+        <td class="small">${esc(fmtDate(p.created_at))}<div class="sub">${esc(p.owner)}</div></td>
+        <td class="actions">
+          <button class="btn small" data-act="usage" data-id="${esc(p.id)}" title="Setup instructions"><i class="ph ph-robot"></i> Use</button>
+          ${p.has_spec || p.kind === "mcp" ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy as MCP server"}</button>` : ""}
+        </td>
+      </tr>`).join("")
+      : `<tr><td colspan="8">${emptyState("plugs-connected", "No backends here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</td></tr>`}
+    </table></div></div>
+    <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> puts a backend on the shared gateway endpoint, with this portal's tool policy enforced. <strong>Deployed</strong> additionally gives it an MCP server of its own at <span class="mono">/mcp/&lt;id&gt;</span>, with plain tool names, for teams that want one product per connector. Both take effect on the next request, no restart.</span></div>`;
 
   $("#btn-register").onclick = registerDialog;
+  const applyFilters = () => {
+    const k = $("#reg-filter-kind").value, a = $("#reg-filter-auth").value;
+    $("#registry-table").querySelectorAll("tr[data-open]").forEach((tr) => {
+      tr.style.display = (!k || tr.dataset.kind === k) && (!a || tr.dataset.auth === a) ? "" : "none";
+    });
+  };
+  $("#reg-filter-kind").onchange = applyFilters; $("#reg-filter-auth").onchange = applyFilters;
+  $("#page").querySelectorAll("tr[data-open]").forEach((tr) => tr.onclick = (e) => {
+    if (e.target.closest("button")) return;
+    setHash("provider", { p: tr.dataset.open });
+  });
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     const { act, id } = b.dataset;
     try {
@@ -517,25 +562,23 @@ pages.tokens = async () => {
     { key: "all", label: "All", icon: "squares-four", count: d.items.length },
   ], filter, (k) => { setHash("tokens", { f: k }); pages.tokens(); });
 
+  pageActions(`<button class="btn solid" id="btn-issue"><i class="ph ph-plus"></i> Issue token</button>`);
+  const stateChip = { active: chip("green", "Active", "check"), revoked: chip("red", "Revoked", "prohibit"), expired: chip("amber", "Expired", "hourglass") };
   $("#page").innerHTML = `
-    <div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
-        <h2 class="section-title" style="margin:0">Agent tokens</h2>
-        <button class="btn solid" id="btn-issue"><i class="ph ph-plus"></i> Issue token</button>
-      </div>
-      ${items.length ? `<div class="cards">${items.map((t, i) => `
-        <div class="card lift">
-          <div class="card-head"><span class="card-brand">${logo(t.agent, i)} ${esc(t.agent)}</span>${{ active: chip("green", "Active", "check"), revoked: chip("red", "Revoked", "prohibit"), expired: chip("amber", "Expired", "hourglass") }[state(t)]}</div>
-          <div class="tiles">${tile("user", "Bizplay user", `${t.sub}, ${t.role}`)}${tile("calendar-blank", "Expires", fmtDate(t.expires_at))}</div>
-          <h3 class="card-title">${esc(t.label)}</h3>
-          <p class="card-desc">${esc(t.company)}. ${t.scopes.join(", ")}. ${t.last_used_at ? `Last used ${esc(fmtTs(t.last_used_at))}.` : "Never used."} Issued by ${esc(t.created_by)}.</p>
-          <div class="card-actions">
-            <span class="btn small" style="cursor:default"><i class="ph ph-key"></i> <span class="mono">${esc(t.hint)}</span></span>
-            ${alive(t) ? `<button class="btn small solid" data-revoke="${esc(t.id)}"><i class="ph ph-prohibit"></i> Revoke</button>` : ""}
-          </div>
-        </div>`).join("")}</div>`
-      : `<div class="card">${emptyState("key", "No tokens here", "Issue one to connect an AI agent to the gateway over HTTP.")}</div>`}
-    </div>`;
+    <div class="table-card"><div class="table-wrap"><table>
+      <tr><th>Token</th><th>Agent</th><th>Bizplay user</th><th>Company</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr>
+      ${items.length ? items.map((t, i) => `<tr>
+        <td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub mono">${esc(t.hint)}</div></span></span></td>
+        <td>${esc(t.agent)}</td>
+        <td><span class="mono">${esc(t.sub)}</span><div class="sub">${esc(t.role)}</div></td>
+        <td class="small">${esc(t.company)}</td>
+        <td>${stateChip[state(t)]}</td>
+        <td class="small">${esc(fmtDate(t.expires_at))}</td>
+        <td class="small">${t.last_used_at ? esc(fmtTs(t.last_used_at)) : "never"}<div class="sub">by ${esc(t.created_by)}</div></td>
+        <td class="actions">${alive(t) ? `<button class="btn small danger" data-revoke="${esc(t.id)}"><i class="ph ph-prohibit"></i> Revoke</button>` : ""}</td>
+      </tr>`).join("")
+      : `<tr><td colspan="8">${emptyState("key", "No tokens here", "Issue one to connect an AI agent to the gateway over HTTP.")}</td></tr>`}
+    </table></div></div>`;
   $("#btn-issue").onclick = issueDialog;
   $("#page").querySelectorAll("[data-revoke]").forEach((b) => b.onclick = async () => {
     if (!confirm("Revoke this token? The agent loses access immediately.")) return;
@@ -777,6 +820,9 @@ pages.provider = async () => {
   const g = guides[key];
   const canDeploy = p.has_spec || p.kind === "mcp";
   $("#page-title").textContent = p.name;
+  crumbs({ page: "registry", label: "MCP Registry" }, { page: "provider", label: p.name });
+  pageActions(`<button class="btn" id="head-back"><i class="ph ph-arrow-left"></i> All backends</button><button class="btn solid" id="head-command"><i class="ph ph-terminal-window"></i> Connect command</button>`);
+  $("#head-back").onclick = () => { location.hash = "registry"; };
   renderTabs(Object.entries(guides).map(([k, v]) => ({ key: k, label: v.label, icon: v.icon })), key,
     (k) => { setHash("provider", { p: pid, c: k, ...(via.standalone ? { via: "standalone" } : {}) }); pages.provider(); },
     p.status === "published" ? { title: "Live", sub: `${enabled.length} tools reachable by agents` } : null);
@@ -784,7 +830,6 @@ pages.provider = async () => {
   const shown = enabled.slice(0, 10);
   const backendLabel = p.kind === "mcp" ? "Upstream MCP server" : "Upstream API";
   $("#page").innerHTML = `
-    <div><button class="btn small" id="back-registry"><i class="ph ph-arrow-left"></i> All APIs</button></div>
     <div class="card">
       <div class="card-head">
         <span class="card-brand" style="font-size:16px">${logo(p.name, 0)} ${esc(p.name)}</span>
@@ -800,7 +845,6 @@ pages.provider = async () => {
       </div>
       <p class="card-desc" style="-webkit-line-clamp:3">${p.kind === "mcp" ? "Tools proxied from the MCP server, unchanged" : `Spec from ${esc(p.spec_source)}`}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : p.auth_mode === "oauth" ? `Each caller's own linked account token is sent; ${conns.length} user(s) linked.` : "The gateway sends a stored service token on every call."}</p>
       <div class="card-actions">
-        <button class="btn small solid" data-act="command"><i class="ph ph-terminal-window"></i> Connect command</button>
         <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit connection</button>
         <button class="btn small" data-act="test"><i class="ph ph-plugs"></i> Test connection</button>
         <button class="btn small" data-act="access"><i class="ph ph-sliders-horizontal"></i> Manage tools</button>
@@ -851,7 +895,7 @@ pages.provider = async () => {
     </div>
     <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Tokens are shown once, so issue a new one and revoke the old if you lost it.</span></div>`;
 
-  $("#back-registry").onclick = () => { location.hash = "registry"; };
+  $("#head-command").onclick = () => commandDialog(p, via);
   $("#page").querySelectorAll("[name=via]").forEach((r) => r.onchange = () => {
     setHash("provider", { p: pid, c: key, ...(r.value === "standalone" ? { via: "standalone" } : {}) }); pages.provider();
   });
@@ -948,11 +992,13 @@ pages.audit = async () => {
     { key: "error", label: "Errors", icon: "warning", count: d.items.filter((e) => e.outcome === "error").length },
   ], filter, (k) => { setHash("audit", { f: k }); pages.audit(); });
 
+  pageActions(`<button class="btn" id="audit-refresh"><i class="ph ph-arrows-clockwise"></i> Refresh</button>`);
   $("#page").innerHTML = `
     <div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-        <h2 class="section-title" style="margin:0">Gateway calls, newest first</h2>
-        <span style="display:flex;gap:8px;align-items:center"><input id="audit-filter" class="filter" placeholder="Filter by user or tool" aria-label="Filter audit log"><button class="btn" id="audit-refresh"><i class="ph ph-arrows-clockwise"></i> Refresh</button></span>
+      <div class="filter-bar" style="margin-bottom:14px">
+        <label>Filter <input id="audit-filter" class="filter" placeholder="User or tool" aria-label="Filter audit log"></label>
+        <span class="grow"></span>
+        <span class="muted small">Newest first, ${items.length} call(s)</span>
       </div>
       <div class="table-card"><div class="table-wrap"><table id="audit-table"><tr><th>Time (UTC)</th><th>User</th><th>Identified via</th><th>Tool</th><th>Arguments</th><th>Outcome</th><th>Detail</th></tr>
       ${items.length ? items.map((e) => `<tr><td class="small mono">${esc(e.ts)}</td><td class="mono">${esc(e.user_id)}</td><td>${e.via === "bearer" ? chip("green", "bearer", "key") : chip("", "env")}</td><td class="mono">${esc(e.tool)}</td><td class="small mono">${esc(JSON.stringify(e.arguments))}</td><td>${outcomeChip(e.outcome)}</td><td class="small">${esc(e.detail)}</td></tr>`).join("")

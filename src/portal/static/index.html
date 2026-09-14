@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bizplay MCP Portal</title>
-  <!-- Satoshi (Fontshare), Geist Mono, Phosphor icons. CDN for the mockup; self-host for production. -->
-  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap">
+  <!-- Pretendard (the Korean enterprise standard), Geist Mono, Phosphor icons. CDN for the mockup; self-host for production. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css">
   <!-- Bump the version when editing the assets so browsers do not serve a stale copy. -->
-  <link rel="stylesheet" href="/static/styles.css?v=14">
+  <link rel="stylesheet" href="/static/styles.css?v=15">
   <script>
     try { const t = localStorage.getItem("portal.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
   </script>
@@ -23,7 +23,7 @@
     <div class="login-mark"><i class="ph-fill ph-plugs-connected"></i></div>
     <div>
       <h1 class="login-title">Bizplay MCP Portal</h1>
-      <p class="muted">Register APIs, control access, watch every agent call.</p>
+      <p class="muted">Register backends, control access, watch every agent call.</p>
     </div>
     <label class="field">Email <input name="email" type="email" value="admin@bizplay.co.kr" autocomplete="username" required></label>
     <label class="field">Password <input name="password" type="password" value="admin1234" autocomplete="current-password" required></label>
@@ -35,32 +35,39 @@
 
 <!-- App -->
 <div id="app" class="frame hidden">
-  <aside class="rail">
-    <div class="rail-avatar" title="Bizplay MCP Portal"><i class="ph-fill ph-plugs-connected"></i></div>
-    <nav class="rail-nav" aria-label="Main">
-      <a data-page="overview" class="active" title="Overview" aria-label="Overview"><i class="ph ph-house"></i></a>
-      <a data-page="registry" title="MCP Registry" aria-label="MCP Registry"><i class="ph ph-plugs-connected"></i></a>
-      <a data-page="access" title="Access Control" aria-label="Access Control"><i class="ph ph-shield-check"></i></a>
-      <a data-page="tokens" title="Agent Tokens" aria-label="Agent Tokens"><i class="ph ph-key"></i></a>
-      <a data-page="security" title="Security" aria-label="Security"><i class="ph ph-lock-key"></i></a>
-      <a data-page="audit" title="Audit Log" aria-label="Audit Log"><i class="ph ph-list-magnifying-glass"></i></a>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark"><i class="ph-fill ph-plugs-connected"></i></span><span class="brand-name">bizplay</span></div>
+    <div class="brand-sub">MCP Portal · DemoCorp01</div>
+    <div class="side-group">Gateway</div>
+    <nav class="side-nav" aria-label="Main">
+      <a data-page="overview" class="active"><i class="ph ph-house"></i> Overview</a>
+      <a data-page="registry"><i class="ph ph-plugs-connected"></i> MCP Registry</a>
+      <a data-page="access"><i class="ph ph-sliders-horizontal"></i> Access Control</a>
     </nav>
-    <div class="rail-bottom">
-      <button id="theme-toggle" class="rail-btn" title="Toggle theme" aria-label="Toggle theme"><i class="ph ph-moon"></i></button>
-      <button id="logout" class="rail-btn" title="Sign out" aria-label="Sign out"><i class="ph ph-sign-out"></i></button>
+    <div class="side-group">Security</div>
+    <nav class="side-nav" aria-label="Security">
+      <a data-page="tokens"><i class="ph ph-key"></i> Agent Tokens</a>
+      <a data-page="security"><i class="ph ph-shield-check"></i> Security</a>
+      <a data-page="audit"><i class="ph ph-list-magnifying-glass"></i> Audit Log</a>
+    </nav>
+    <div class="side-bottom">
+      <button id="theme-toggle" class="rail-btn" title="Toggle theme"><i class="ph ph-moon"></i> Theme</button>
+      <button id="logout" class="rail-btn" title="Sign out"><i class="ph ph-sign-out"></i> Sign out</button>
     </div>
   </aside>
 
   <main class="panel">
     <header class="header">
-      <h1 id="page-title">Overview</h1>
+      <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"><a data-page="overview"><i class="ph ph-house"></i> Home</a></nav>
       <div class="header-right">
+        <label class="search"><i class="ph ph-magnifying-glass"></i><input id="global-search" placeholder="Search this page" aria-label="Search this page"><kbd>Ctrl+K</kbd></label>
         <button id="refresh" class="hbtn" title="Reload this page's data" aria-label="Refresh"><i class="ph ph-arrows-clockwise"></i></button>
         <button class="hbtn" title="Help" aria-label="Help"><i class="ph ph-question"></i></button>
         <button class="hbtn" title="Notifications" aria-label="Notifications"><i class="ph ph-bell"></i></button>
-        <div class="user-chip"><span id="whoami-avatar" class="avatar">A</span><span id="whoami-name">Admin</span><i class="ph ph-caret-down"></i></div>
+        <div class="user-chip"><span id="whoami-avatar" class="avatar">A</span><span class="who"><strong id="whoami-name">Admin</strong><span id="whoami-sub">DemoCorp01 / Portal</span></span></div>
       </div>
     </header>
+    <div class="page-head"><h1 id="page-title">Overview</h1><div class="page-actions" id="page-actions"></div></div>
     <div id="tabs" class="tabs hidden"></div>
     <div id="page" class="page-body"></div>
   </main>
@@ -69,6 +76,6 @@
 <div id="modal" class="modal hidden" role="dialog" aria-modal="true"><div class="modal-card"><div id="modal-body"></div></div></div>
 <div id="toast" class="toast hidden" role="status"></div>
 
-<script src="/static/app.js?v=14"></script>
+<script src="/static/app.js?v=15"></script>
 </body>
 </html>
