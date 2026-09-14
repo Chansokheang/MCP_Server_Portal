@@ -2,8 +2,11 @@
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const fmtTs = (t) => (typeof t === "number" ? new Date(t * 1000) : new Date(t)).toLocaleString();
-const fmtDate = (t) => (typeof t === "number" ? new Date(t * 1000) : new Date(t)).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+const asDate = (t) => (typeof t === "number" ? new Date(t * 1000) : new Date(t));
+// Compact, single-line date formats so table columns never wrap.
+const fmtTs = (t) => asDate(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const fmtDate = (t) => asDate(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+const fmtUtc = (iso) => String(iso).replace("T", " ").replace(/\+00:00$/, "").slice(5, 19);  // "09-14 14:25:38"
 const days = (secs) => Math.max(0, Math.round(secs / 86400));
 const initials = (s) => String(s || "?").split(/[\s\-_]+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || "").join("");
 
@@ -225,30 +228,38 @@ function renderTabs(items, active, onPick, note) {
 // ---- Overview ----
 pages.overview = async () => {
   const d = await api("GET", "/api/overview");
+  const open = d.checklist.filter((c) => !c.ok), passing = d.checklist.length - open.length;
+  const when = (ts) => { const t = new Date(ts); return `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`; };
   $("#page").innerHTML = `
     <div class="stats">
-      <div class="stat"><span class="num">${d.providers}</span><span class="lbl">Registered APIs, ${d.published} published</span></div>
+      <div class="stat"><span class="num">${d.providers}</span><span class="lbl">Registered backends, ${d.published} published</span></div>
       <div class="stat"><span class="num">${d.tools_enabled}</span><span class="lbl">Tools enabled for agents</span></div>
       <div class="stat"><span class="num">${d.tokens_active}</span><span class="lbl">Active agent tokens</span></div>
-      <div class="stat"><span class="num" style="color:${d.score >= 70 ? "var(--green-ink)" : "var(--amber-ink)"}">${d.score}%</span><span class="lbl">Security checklist</span></div>
+      <div class="stat"><span class="num" style="color:${d.score >= 70 ? "var(--green-ink)" : "var(--amber-ink)"}">${d.score}%</span><span class="lbl">Security score, ${open.length} open item(s)</span></div>
+    </div>
+    <div class="card flow-card">
+      <div class="flow">
+        <div class="node"><strong>AI agent</strong><span class="muted">Claude, ChatGPT, Copilot, Agentforce</span></div>
+        <span class="arrow"><i class="ph ph-arrow-right"></i><br>agent token</span>
+        <div class="node hl"><strong>MCP Gateway</strong><span>authentication, tool policy, company scope, audit</span></div>
+        <span class="arrow"><i class="ph ph-arrow-right"></i><br>service or user token</span>
+        <div class="node"><strong>REST API or MCP server</strong><span class="muted">unchanged; may also be deployed as its own MCP server</span></div>
+      </div>
+      <p class="muted small" style="margin:0">Two separate tokens: one identifies the end user to the gateway, one identifies the gateway to the backend. Neither reaches the model.</p>
     </div>
     <div class="two">
       <div>
-        <h2 class="section-title">How a request flows</h2>
-        <div class="card">
-          <div class="flow">
-            <div class="node"><strong>AI agent</strong><span class="muted">Claude, Copilot, Agentforce</span></div><span class="arrow">agent token</span>
-            <div class="node hl"><strong>MCP Gateway</strong>auth, policy, company scope, audit</div><span class="arrow">service token</span>
-            <div class="node"><strong>REST API or MCP server</strong><span class="muted">unchanged</span></div>
-          </div>
-          <p class="muted small" style="margin:4px 0 0">Two separate tokens. One identifies the end user to the gateway, one identifies the gateway to the backend. Neither reaches the model. A backend is either a REST API the gateway adapts, or an MCP server it proxies; any registered API can also be deployed as an MCP server of its own.</p>
-        </div>
-        <h2 class="section-title" style="margin-top:22px">Security checklist</h2>
-        <div class="checklist">${d.checklist.map((c) => `<div class="check-item ${c.ok ? "ok" : "bad"}"><span class="mark"><i class="ph ${c.ok ? "ph-check" : "ph-x"}"></i></span><div><strong>${esc(c.label)}</strong><div class="muted small">${esc(c.detail)}</div></div></div>`).join("")}</div>
+        <div class="section-head"><h2 class="section-title">Security checklist</h2><a class="btn small link" href="#security?t=checklist">View all ${d.checklist.length}</a></div>
+        <div class="table-card"><div class="table-wrap"><table>
+          <tr><th style="width:90px">Status</th><th>Check</th></tr>
+          ${open.map((c) => `<tr><td>${chip("red", "Open", "x")}</td><td><strong>${esc(c.label)}</strong><div class="sub">${esc(c.detail)}</div></td></tr>`).join("")}
+          ${open.length ? "" : `<tr><td colspan="2">${emptyState("shield-check", "Every check passes", "Nothing open on the Security page.")}</td></tr>`}
+          ${passing ? `<tr><td>${chip("green", "Pass", "check")}</td><td class="muted">${passing} check(s) passing</td></tr>` : ""}
+        </table></div></div>
       </div>
       <div>
-        <h2 class="section-title">Recent gateway activity</h2>
-        <div class="table-card">${d.audit_recent.length ? `<div class="table-wrap"><table><tr><th>Time</th><th>User</th><th>Tool</th><th>Result</th></tr>${d.audit_recent.map((e) => `<tr><td class="small">${esc(fmtTs(e.ts))}</td><td><span class="mono">${esc(e.user_id)}</span> ${chip("", e.via || "env")}</td><td class="mono">${esc(e.tool)}</td><td>${outcomeChip(e.outcome)}</td></tr>`).join("")}</table></div>` : emptyState("chat-circle-dots", "No gateway calls yet", "Ask Claude something that uses a Bizplay tool and it shows up here.")}</div>
+        <div class="section-head"><h2 class="section-title">Recent gateway activity</h2><a class="btn small link" href="#audit">Audit log</a></div>
+        <div class="table-card">${d.audit_recent.length ? `<div class="table-wrap"><table><tr><th>Time</th><th>User</th><th>Tool</th><th>Result</th></tr>${d.audit_recent.map((e) => `<tr><td class="small mono" style="white-space:nowrap">${esc(when(e.ts))}</td><td><span class="mono">${esc(e.user_id)}</span><div class="sub">${esc(e.via || "env")}</div></td><td class="mono small">${esc(e.tool)}</td><td>${outcomeChip(e.outcome)}</td></tr>`).join("")}</table></div>` : emptyState("chat-circle-dots", "No gateway calls yet", "Ask Claude something that uses a Bizplay tool and it shows up here.")}</div>
       </div>
     </div>`;
 };
@@ -275,21 +286,19 @@ pages.registry = async () => {
       <span class="muted small">${items.length} backend(s). Type in the search box above to filter by name, URL or owner.</span>
     </div>
     <div class="table-card"><div class="table-wrap"><table id="registry-table">
-      <tr><th>Backend</th><th>Type</th><th>Auth</th><th>Status</th><th>Tools</th><th>Endpoint</th><th>Registered</th><th></th></tr>
-      ${items.length ? items.map((p, i) => `<tr class="row-link" data-kind="${esc(p.kind)}" data-auth="${esc(p.auth_mode)}" data-open="${esc(p.id)}">
+      <tr><th>Backend</th><th>Type</th><th>Auth</th><th>Status</th><th>Tools</th><th>Endpoint</th><th></th></tr>
+      ${items.length ? items.map((p, i) => `<tr class="row-link" data-kind="${esc(p.kind)}" data-auth="${esc(p.auth_mode)}" data-open="${esc(p.id)}" title="Registered ${esc(fmtDate(p.created_at))} by ${esc(p.owner)}">
         <td><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub mono">${esc(p.base_url.replace(/^https?:\/\//, ""))}</div></span></span></td>
         <td>${kindChip(p.kind)}</td>
         <td>${authChip(p.auth_mode)}</td>
-        <td>${statusChip(p.status)} ${standaloneChip(p)}</td>
+        <td><div class="chips">${statusChip(p.status)}${standaloneChip(p)}</div></td>
         <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
-        <td class="mono small">${esc(p.standalone ? p.standalone_url : p.mcp_url)}${p.tool_prefix && !p.standalone ? `<div class="sub">tools ${esc(p.tool_prefix)}*</div>` : p.standalone ? `<div class="sub">own server, plain tool names</div>` : ""}</td>
-        <td class="small">${esc(fmtDate(p.created_at))}<div class="sub">${esc(p.owner)}</div></td>
+        <td class="mono small url">${esc(p.standalone ? p.standalone_url : p.mcp_url)}${p.tool_prefix && !p.standalone ? `<div class="sub">tools ${esc(p.tool_prefix)}*</div>` : p.standalone ? `<div class="sub">own server, plain tool names</div>` : ""}</td>
         <td class="actions">
-          <button class="btn small" data-act="usage" data-id="${esc(p.id)}" title="Setup instructions"><i class="ph ph-robot"></i> Use</button>
-          ${p.has_spec || p.kind === "mcp" ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy as MCP server"}</button>` : ""}
+          ${p.has_spec || p.kind === "mcp" ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy"}</button>` : `<button class="btn small link" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> Setup</button>`}
         </td>
       </tr>`).join("")
-      : `<tr><td colspan="8">${emptyState("plugs-connected", "No backends here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</td></tr>`}
+      : `<tr><td colspan="7">${emptyState("plugs-connected", "No backends here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</td></tr>`}
     </table></div></div>
     <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> puts a backend on the shared gateway endpoint, with this portal's tool policy enforced. <strong>Deployed</strong> additionally gives it an MCP server of its own at <span class="mono">/mcp/&lt;id&gt;</span>, with plain tool names, for teams that want one product per connector. Both take effect on the next request, no restart.</span></div>`;
 
@@ -346,7 +355,7 @@ pages.servers = async () => {
       ${rows.length ? rows.map((p, i) => `<tr class="row-link" data-open="${esc(p.id)}">
         <td><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub">${esc(p.id)}</div></span></span></td>
         <td>${kindChip(p.kind)}<div class="sub mono">${esc(p.base_url.replace(/^https?:\/\//, ""))}</div></td>
-        <td class="mono small">${esc(p.standalone_url)}${filter === "deployed" ? `<div class="sub">plain tool names, no prefix</div>` : ""}</td>
+        <td class="mono small url">${esc(p.standalone_url)}${filter === "deployed" ? `<div class="sub">plain tool names, no prefix</div>` : ""}</td>
         <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
         <td>${p.standalone ? (p.status === "published" ? chip("green", "Serving", "check") : chip("amber", "Waiting for publish", "hourglass")) : statusChip(p.status)}</td>
         <td class="actions">
@@ -663,18 +672,17 @@ pages.tokens = async () => {
   const stateChip = { active: chip("green", "Active", "check"), revoked: chip("red", "Revoked", "prohibit"), expired: chip("amber", "Expired", "hourglass") };
   $("#page").innerHTML = `
     <div class="table-card"><div class="table-wrap"><table>
-      <tr><th>Token</th><th>Agent</th><th>Bizplay user</th><th>Company</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr>
-      ${items.length ? items.map((t, i) => `<tr>
-        <td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub mono">${esc(t.hint)}</div></span></span></td>
-        <td>${esc(t.agent)}</td>
-        <td><span class="mono">${esc(t.sub)}</span><div class="sub">${esc(t.role)}</div></td>
+      <tr><th>Token</th><th>Bizplay user</th><th>Company</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr>
+      ${items.length ? items.map((t, i) => `<tr title="Issued by ${esc(t.created_by)}">
+        <td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub"><span class="mono">${esc(t.hint)}</span> · ${esc(t.agent)}</div></span></span></td>
+        <td class="nowrap"><span class="mono">${esc(t.sub)}</span><div class="sub">${esc(t.role)}</div></td>
         <td class="small">${esc(t.company)}</td>
         <td>${stateChip[state(t)]}</td>
-        <td class="small">${esc(fmtDate(t.expires_at))}</td>
-        <td class="small">${t.last_used_at ? esc(fmtTs(t.last_used_at)) : "never"}<div class="sub">by ${esc(t.created_by)}</div></td>
+        <td class="small nowrap">${esc(fmtDate(t.expires_at))}</td>
+        <td class="small nowrap">${t.last_used_at ? esc(fmtTs(t.last_used_at)) : "never"}</td>
         <td class="actions">${alive(t) ? `<button class="btn small danger" data-revoke="${esc(t.id)}"><i class="ph ph-prohibit"></i> Revoke</button>` : ""}</td>
       </tr>`).join("")
-      : `<tr><td colspan="8">${emptyState("key", "No tokens here", "Issue one to connect an AI agent to the gateway over HTTP.")}</td></tr>`}
+      : `<tr><td colspan="7">${emptyState("key", "No tokens here", "Issue one to connect an AI agent to the gateway over HTTP.")}</td></tr>`}
     </table></div></div>`;
   $("#btn-issue").onclick = issueDialog;
   $("#page").querySelectorAll("[data-revoke]").forEach((b) => b.onclick = async () => {
@@ -1141,9 +1149,9 @@ pages.audit = async () => {
         <span class="grow"></span>
         <span class="muted small">Newest first, ${items.length} call(s)</span>
       </div>
-      <div class="table-card"><div class="table-wrap"><table id="audit-table"><tr><th>Time (UTC)</th><th>User</th><th>Identified via</th><th>Tool</th><th>Arguments</th><th>Outcome</th><th>Detail</th></tr>
-      ${items.length ? items.map((e) => `<tr><td class="small mono">${esc(e.ts)}</td><td class="mono">${esc(e.user_id)}</td><td>${e.via === "bearer" ? chip("green", "bearer", "key") : chip("", "env")}</td><td class="mono">${esc(e.tool)}</td><td class="small mono">${esc(JSON.stringify(e.arguments))}</td><td>${outcomeChip(e.outcome)}</td><td class="small">${esc(e.detail)}</td></tr>`).join("")
-        : `<tr><td colspan="7">${emptyState("list-magnifying-glass", "Nothing here", "Every gateway call is recorded with who made it and the outcome.")}</td></tr>`}</table></div></div>
+      <div class="table-card"><div class="table-wrap"><table id="audit-table"><tr><th>Time (UTC)</th><th>User</th><th>Tool</th><th>Arguments</th><th>Outcome</th><th>Detail</th></tr>
+      ${items.length ? items.map((e) => `<tr><td class="small mono nowrap">${esc(fmtUtc(e.ts))}</td><td class="nowrap"><span class="mono">${esc(e.user_id)}</span><div class="sub">${esc(e.via || "env")}</div></td><td class="mono small tool">${esc(e.tool)}</td><td class="small mono clip" title="${esc(JSON.stringify(e.arguments))}">${esc(JSON.stringify(e.arguments))}</td><td>${outcomeChip(e.outcome)}</td><td class="small muted">${esc(e.detail)}</td></tr>`).join("")
+        : `<tr><td colspan="6">${emptyState("list-magnifying-glass", "Nothing here", "Every gateway call is recorded with who made it and the outcome.")}</td></tr>`}</table></div></div>
     </div>`;
   $("#audit-refresh").onclick = () => pages.audit();
   $("#audit-filter").oninput = (e) => {
