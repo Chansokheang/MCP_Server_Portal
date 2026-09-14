@@ -156,7 +156,7 @@ function enterApp() {
 
 // ---- router ----
 const pages = {};
-const titles = { overview: "Overview", registry: "MCP Registry", provider: "Backend details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
+const titles = { overview: "Overview", registry: "MCP Registry", servers: "MCP Servers", provider: "Backend details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
 // Pages reached from another page keep that page's nav item lit.
 const RAIL_OF = { provider: "registry" };
 function hashParam(name) { return new URLSearchParams(location.hash.split("?")[1] || "").get(name); }
@@ -319,7 +319,95 @@ pages.registry = async () => {
   });
 };
 
-async function registerDialog() {
+// ---- MCP Servers: one deployed server per product, next to the shared gateway ----
+pages.servers = async () => {
+  const d = await api("GET", "/api/registry");
+  const deployable = d.items.filter((p) => p.has_spec || p.kind === "mcp");
+  const live = deployable.filter((p) => p.standalone);
+  const candidates = deployable.filter((p) => !p.standalone);
+  const filter = hashParam("f") || "deployed";
+  renderTabs([
+    { key: "deployed", label: "Deployed", icon: "rocket-launch", count: live.length },
+    { key: "available", label: "Available to deploy", icon: "cube", count: candidates.length },
+  ], filter, (k) => { setHash("servers", { f: k }); pages.servers(); },
+  live.length ? { title: `${live.length} server(s) live`, sub: `${live.reduce((n, p) => n + p.tools_enabled, 0)} tools served` } : null);
+  pageActions(`<button class="btn solid" id="btn-deploy-new"><i class="ph ph-rocket-launch"></i> Deploy MCP server</button>`);
+
+  const rows = filter === "deployed" ? live : candidates;
+  $("#page").innerHTML = `
+    <div class="stats">
+      <div class="stat"><span class="num">${live.length}</span><span class="lbl">MCP servers deployed</span></div>
+      <div class="stat"><span class="num">${live.reduce((n, p) => n + p.tools_enabled, 0)}</span><span class="lbl">Tools served by them</span></div>
+      <div class="stat"><span class="num">${candidates.length}</span><span class="lbl">Registered backends not deployed yet</span></div>
+      <div class="stat"><span class="num">${d.items.filter((p) => p.status === "published").length}</span><span class="lbl">Backends on the shared gateway</span></div>
+    </div>
+    <div class="table-card"><div class="table-wrap"><table>
+      <tr><th>MCP server</th><th>Built from</th><th>${filter === "deployed" ? "Endpoint" : "Would be served at"}</th><th>Tools</th><th>Status</th><th></th></tr>
+      ${rows.length ? rows.map((p, i) => `<tr class="row-link" data-open="${esc(p.id)}">
+        <td><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub">${esc(p.id)}</div></span></span></td>
+        <td>${kindChip(p.kind)}<div class="sub mono">${esc(p.base_url.replace(/^https?:\/\//, ""))}</div></td>
+        <td class="mono small">${esc(p.standalone_url)}${filter === "deployed" ? `<div class="sub">plain tool names, no prefix</div>` : ""}</td>
+        <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
+        <td>${p.standalone ? (p.status === "published" ? chip("green", "Serving", "check") : chip("amber", "Waiting for publish", "hourglass")) : statusChip(p.status)}</td>
+        <td class="actions">
+          ${p.standalone
+            ? `<button class="btn small" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> Setup</button><button class="btn small danger" data-act="undeploy" data-id="${esc(p.id)}"><i class="ph ph-rocket"></i> Undeploy</button>`
+            : `<button class="btn small solid" data-act="deploy" data-id="${esc(p.id)}"><i class="ph ph-rocket-launch"></i> Deploy</button>`}
+        </td>
+      </tr>`).join("")
+      : `<tr><td colspan="6">${filter === "deployed"
+          ? emptyState("rocket-launch", "No MCP server deployed yet", "Deploy one from a registered backend, or register a new API and deploy it in one go.")
+          : emptyState("cube", "Everything is deployed", "Register another backend in the MCP Registry to deploy it here.")}</td></tr>`}
+    </table></div></div>
+    <div class="callout"><i class="ph ph-info"></i><span>An MCP server here is one backend served on its own address (<span class="mono">/mcp/&lt;id&gt;</span>) with plain tool names: the shape a vendor's own MCP app has in claude.ai or ChatGPT. It runs inside this gateway, so deploying needs no restart, and the same agent tokens, tool policy, company scoping and audit apply. The same backend keeps working on the shared gateway with prefixed names.</span></div>`;
+
+  $("#btn-deploy-new").onclick = () => deployDialog(candidates);
+  $("#page").querySelectorAll("tr[data-open]").forEach((tr) => tr.onclick = (e) => {
+    if (e.target.closest("button")) return;
+    setHash("provider", { p: tr.dataset.open, via: "standalone" });
+  });
+  $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
+    const { act, id } = b.dataset;
+    try {
+      if (act === "usage") { setHash("provider", { p: id, c: "chatgpt", via: "standalone" }); return; }
+      const r = await api("POST", `/api/registry/${id}/${act}`);
+      toast(act === "deploy" ? "MCP server deployed" : "Undeployed",
+        act === "deploy" ? `${r.name} now answers at ${r.standalone_url}` : `${r.standalone_url} now returns 404; the shared gateway still serves it`, 6000);
+      setHash("servers", { f: "deployed" }); pages.servers();
+    } catch (err) { toast("Action failed", err.message, 4500); }
+  });
+};
+
+/** Pick a registered backend to deploy, or register a new API and deploy it right after. */
+function deployDialog(candidates) {
+  modal(`<h2><i class="ph ph-rocket-launch"></i> Deploy an MCP server</h2>
+    <p class="muted">One product, one server. Pick a backend already registered, or register a new API first and it deploys as soon as it is saved.</p>
+    <form id="dp-form" class="form">
+      <label class="field">Backend to deploy
+        <select name="pid" ${candidates.length ? "" : "disabled"}>
+          ${candidates.length ? candidates.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${p.kind === "mcp" ? "MCP server" : "REST API"}, ${p.tools_enabled} tools)</option>`).join("") : `<option>Every registered backend is already deployed</option>`}
+        </select></label>
+      <div class="callout"><i class="ph ph-info"></i><span>It will be served at <span class="mono" id="dp-url">${esc(candidates[0]?.standalone_url || "...")}</span> with plain tool names, and published on the shared gateway if it was still a draft.</span></div>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn" id="dp-register"><i class="ph ph-plus"></i> Register a new API instead</button>
+        <span style="display:flex;gap:8px"><button type="button" class="btn" id="dp-cancel">Cancel</button><button class="btn solid" type="submit" ${candidates.length ? "" : "disabled"}><i class="ph ph-rocket-launch"></i> Deploy</button></span>
+      </div>
+      <p class="error" id="dp-error"></p>
+    </form>`);
+  $("#dp-cancel").onclick = closeModal;
+  $("#dp-register").onclick = () => { closeModal(); registerDialog({ deployAfter: true }); };
+  $("#dp-form [name=pid]").onchange = (e) => { $("#dp-url").textContent = candidates.find((p) => p.id === e.target.value)?.standalone_url || ""; };
+  $("#dp-form").onsubmit = async (e) => {
+    e.preventDefault(); const pid = $("#dp-form [name=pid]").value;
+    try {
+      const r = await api("POST", `/api/registry/${pid}/deploy`);
+      closeModal(); toast("MCP server deployed", `${r.name} now answers at ${r.standalone_url}`, 6000);
+      setHash("provider", { p: pid, c: "chatgpt", via: "standalone" });
+    } catch (err) { $("#dp-error").textContent = err.message; }
+  };
+}
+
+async function registerDialog(opts = {}) {
   modal(`<h2><i class="ph ph-plus-circle"></i> Register a backend</h2>
     <form id="reg-form" class="form">
       <div class="seg" id="reg-kind" role="radiogroup" aria-label="Backend type">
@@ -381,6 +469,15 @@ async function registerDialog() {
     try {
       const p = await api("POST", "/api/registry", { ...f, spec_source: "uploaded" });
       toast("Registered as draft", p.kind === "mcp" ? `${p.tool_count} tools read from the MCP server` : `${p.tool_count} tools generated from the spec`);
+      if (opts.deployAfter && p.auth_mode !== "bearer") {
+        // Came from the MCP Servers page: serve it on its own address right away.
+        // Bearer mode needs its service token checked first, so that one goes through the test.
+        try {
+          const r = await api("POST", `/api/registry/${p.id}/deploy`);
+          closeModal(); toast("MCP server deployed", `${r.name} now answers at ${r.standalone_url}`, 6000);
+          setHash("provider", { p: p.id, c: "chatgpt", via: "standalone" }); return;
+        } catch (err) { toast("Registered, but not deployed", err.message, 6000); }
+      }
       if (p.auth_mode === "oauth" && !p.oauth_ready) {
         // Try the server's own metadata before asking anyone to type endpoints.
         try { const d = await api("POST", `/api/registry/${p.id}/oauth/discover`, {}); toast("OAuth endpoints discovered", d.note, 5000); }
