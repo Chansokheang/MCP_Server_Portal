@@ -286,11 +286,10 @@ pages.registry = async () => {
       <span class="muted small">${items.length} backend(s). Type in the search box above to filter by name, URL or owner.</span>
     </div>
     <div class="table-card"><div class="table-wrap"><table id="registry-table">
-      <tr><th>Backend</th><th>Type</th><th>Auth</th><th>Status</th><th>Tools</th><th>Endpoint</th><th></th></tr>
+      <tr><th>Backend</th><th>Type and auth</th><th>Status</th><th>Tools</th><th>Endpoint</th><th></th></tr>
       ${items.length ? items.map((p, i) => `<tr class="row-link" data-kind="${esc(p.kind)}" data-auth="${esc(p.auth_mode)}" data-open="${esc(p.id)}" title="Registered ${esc(fmtDate(p.created_at))} by ${esc(p.owner)}">
         <td><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub mono">${esc(p.base_url.replace(/^https?:\/\//, ""))}</div></span></span></td>
-        <td>${kindChip(p.kind)}</td>
-        <td>${authChip(p.auth_mode)}</td>
+        <td><div class="chips">${kindChip(p.kind)}${authChip(p.auth_mode)}</div></td>
         <td><div class="chips">${statusChip(p.status)}${standaloneChip(p)}</div></td>
         <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
         <td class="mono small url">${esc(p.standalone ? p.standalone_url : p.mcp_url)}${p.tool_prefix && !p.standalone ? `<div class="sub">tools ${esc(p.tool_prefix)}*</div>` : p.standalone ? `<div class="sub">own server, plain tool names</div>` : ""}</td>
@@ -298,7 +297,7 @@ pages.registry = async () => {
           ${p.has_spec || p.kind === "mcp" ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy"}</button>` : `<button class="btn small link" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> Setup</button>`}
         </td>
       </tr>`).join("")
-      : `<tr><td colspan="7">${emptyState("plugs-connected", "No backends here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</td></tr>`}
+      : `<tr><td colspan="6">${emptyState("plugs-connected", "No backends here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</td></tr>`}
     </table></div></div>
     <div class="callout"><i class="ph ph-info"></i><span><strong>Published</strong> puts a backend on the shared gateway endpoint, with this portal's tool policy enforced. <strong>Deployed</strong> additionally gives it an MCP server of its own at <span class="mono">/mcp/&lt;id&gt;</span>, with plain tool names, for teams that want one product per connector. Both take effect on the next request, no restart.</span></div>`;
 
