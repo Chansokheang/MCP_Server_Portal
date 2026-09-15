@@ -1341,12 +1341,11 @@ pages.security = async () => {
   const d = await api("GET", "/api/security");
   const s = d.settings;
   const passed = d.checklist.filter((c) => c.ok).length, score = Math.round(100 * passed / d.checklist.length);
-  const tab = ["checklist", "settings", "credentials", "identity"].includes(hashParam("t")) ? hashParam("t") : "checklist";
+  const tab = ["checklist", "settings", "credentials"].includes(hashParam("t")) ? hashParam("t") : "checklist";
   renderTabs([
     { key: "checklist", label: "Checklist", icon: "list-checks", count: `${passed}/${d.checklist.length}` },
-    { key: "settings", label: "Gateway settings", icon: "sliders-horizontal" },
+    { key: "settings", label: "Defaults", icon: "sliders-horizontal" },
     { key: "credentials", label: "Upstream credentials", icon: "key", count: d.credentials.length },
-    { key: "identity", label: "Identity mapping", icon: "fingerprint", count: Object.keys(d.identity).length },
   ], tab, (k) => { setHash("security", { t: k }); pages.security(); },
   { title: `Security score ${score}%`, sub: `${passed} of ${d.checklist.length} checks pass`, tone: score >= 70 ? "" : "warn" });
 
@@ -1367,7 +1366,11 @@ pages.security = async () => {
         <tr><th style="width:120px">Status</th><th>Check</th><th>Detail</th></tr>
         ${d.checklist.map((c) => `<tr><td>${c.ok ? chip("green", "Pass", "check") : chip("red", "Open", "x")}</td><td><strong>${esc(c.label)}</strong></td><td class="small muted">${esc(c.detail)}</td></tr>`).join("")}
       </table></div></div>
-      <div class="callout"><i class="ph ph-info"></i><span>Two of these stay open by design in the mockup: OAuth 2.1 for agents and a vault for secrets are production work. The rest are decided on the Gateway settings tab and by how each backend is registered.</span></div>`,
+      <div class="callout"><i class="ph ph-info"></i><span>Two of these stay open by design in the mockup: OAuth 2.1 for agents and a vault for secrets are production work. The rest are decided by the Defaults tab, each gateway's own settings, and how each backend is registered.</span></div>
+      <div class="card" style="gap:6px">
+        <div class="section-head" style="margin-bottom:0"><h2 class="section-title">How a caller is identified</h2>${chip("lilac", "issuer: portal", "fingerprint")}</div>
+        <p class="muted small" style="margin:0">Every gateway endpoint reads the same claims from an agent token: <span class="mono">sub</span> is the Bizplay user, <span class="mono">role</span> and <span class="mono">company</span> drive tool policy and company scoping, <span class="mono">groups</span> drive entitlement. Tokens are issued by this portal today; production points the issuer at Bizplay SSO (OAuth 2.1 / OIDC) so they become signed JWTs verified by key.</p>
+      </div>`,
 
     settings: `
       <div class="card settings-list">
@@ -1383,7 +1386,7 @@ pages.security = async () => {
           `The address agents use when a tunnel or nginx sits in front. New registrations inherit it. Blank means this portal's own address, ${esc(SERVER.portal_mcp_url || location.origin + "/mcp")}.`,
           `<input data-s="public_mcp_url" value="${esc(s.public_mcp_url || "")}" placeholder="${esc(SERVER.portal_mcp_url || "https://your-host/mcp")}" aria-label="Public MCP endpoint" class="ctl-wide">`)}
       </div>
-      <p class="muted small">Changes save as you make them.</p>`,
+      <p class="muted small">Changes save as you make them. Token requirement and who may use an endpoint are set per gateway on its own page; these are the portal-wide defaults.</p>`,
 
     credentials: `
       <div class="table-card"><div class="table-wrap"><table>
@@ -1398,16 +1401,6 @@ pages.security = async () => {
       </table></div></div>
       <div class="callout"><i class="ph ph-info"></i><span>Secrets are masked here and never shown again after rotation. The mockup keeps them in a JSON file; production keeps them in a vault.</span></div>`,
 
-    identity: `
-      <div class="table-card"><div class="table-wrap"><table>
-        <tr><th>Backend</th><th>Issuer</th><th>User claim</th><th>Role claim</th><th>Company claim</th></tr>
-        ${Object.entries(d.identity).map(([pid, i], n) => `<tr>
-          <td><span class="name">${logo(pid, n)} ${esc(pid)}</span></td>
-          <td>${chip("lilac", i.issuer, "fingerprint")}</td>
-          <td class="mono">${esc(i.user_claim)}</td><td class="mono">${esc(i.role_claim)}</td><td class="mono">${esc(i.company_claim)}</td>
-        </tr>`).join("")}
-      </table></div></div>
-      <div class="callout"><i class="ph ph-info"></i><span>How the gateway reads who is calling from an agent token. Production points the issuer at Bizplay SSO (OAuth 2.1 / OIDC), so tokens are signed JWTs verified by key rather than looked up in a table.</span></div>`,
   };
   $("#page").innerHTML = views[tab];
   $("#page").querySelectorAll("[data-s]").forEach((inp) => inp.onchange = async () => {
