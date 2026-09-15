@@ -1227,7 +1227,9 @@ pages.gateway = async () => {
   }
   // Tools this endpoint serves, named as the agent sees them.
   const toolLists = await Promise.all(ep.backends.map((p) => api("GET", `/api/registry/${p.id}/tools`)));
-  const tools = ep.backends.flatMap((p, i) => toolLists[i].items.filter((t) => t.enabled).map((t) => ({ ...t, name: (ep.prefixed ? (p.tool_prefix || "") : "") + t.name, backend: p.name, backend_id: p.id })));
+  // Only published backends are actually served; a draft member contributes nothing yet.
+  const tools = ep.backends.flatMap((p, i) => p.status !== "published" ? [] : toolLists[i].items.filter((t) => t.enabled).map((t) => ({ ...t, name: (ep.prefixed ? (p.tool_prefix || "") : "") + t.name, backend: p.name, backend_id: p.id })));
+  const drafts = ep.backends.filter((p) => p.status !== "published");
   const settingsKey = ep.id || "_shared";
   const [es, known] = await Promise.all([api("GET", `/api/endpoints/${settingsKey}/settings`), api("GET", "/api/groups")]);
   const via = { url: ep.url, prefix: "", standalone: ep.standalone, label: ep.name, needsToken: es.require_token };
@@ -1256,7 +1258,8 @@ pages.gateway = async () => {
         ${tile("key", "Auth", es.require_token ? "agent token required" : "no token required")}
       </div>
       <p class="card-desc" style="-webkit-line-clamp:3">${esc(ep.description)}</p>
-      <div class="chips">${ep.backends.length ? ep.backends.map((p) => `<a class="chip lilac" href="#provider?p=${encodeURIComponent(p.id)}" title="Open ${esc(p.name)}"><i class="ph ph-arrow-square-out"></i>${esc(p.name)}</a>`).join("") : chip("", "no backends")}</div>
+      <div class="chips">${ep.backends.length ? ep.backends.map((p) => `<a class="chip ${p.status === "published" ? "lilac" : "amber"}" href="#provider?p=${encodeURIComponent(p.id)}" title="${p.status === "published" ? "Open" : "Draft, not served yet: open"} ${esc(p.name)}"><i class="ph ${p.status === "published" ? "ph-arrow-square-out" : "ph-pencil-simple"}"></i>${esc(p.name)}</a>`).join("") : chip("", "no backends")}</div>
+      ${drafts.length ? `<p class="muted small" style="margin:0">${esc(drafts.map((p) => p.name).join(", "))}: draft, so not served on this endpoint until published.</p>` : ""}
       ${ep.editable || ep.standalone ? `<div class="card-actions">
         ${ep.editable ? `<button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit backends</button><button class="btn small danger" data-act="delete"><i class="ph ph-trash"></i> Delete gateway</button>` : ""}
         ${ep.standalone ? `<button class="btn small danger" data-act="undeploy"><i class="ph ph-rocket"></i> Undeploy</button>` : ""}
