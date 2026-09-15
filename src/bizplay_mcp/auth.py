@@ -61,6 +61,7 @@ class PortalTokenVerifier(TokenVerifier):
             expires_at=int(record["expires_at"]),
             subject=record["sub"],
             claims={"sub": record["sub"], "role": record["role"], "company": record["company"],
+                    "groups": list(record.get("groups") or []),
                     "token_id": record["id"], "agent": record["agent"]},
         )
 
@@ -83,4 +84,6 @@ def current_principal() -> Principal:
         "role": os.environ.get("BIZPLAY_ROLE"),
         "company": os.environ.get("BIZPLAY_COMPANY"),
     }.items() if v}
+    # BIZPLAY_GROUPS=finance,hr gives the env identity access groups too.
+    claims["groups"] = [g.strip() for g in os.environ.get("BIZPLAY_GROUPS", "").split(",") if g.strip()]
     return Principal(os.environ.get("BIZPLAY_USER_ID", "emp001"), "env", claims)

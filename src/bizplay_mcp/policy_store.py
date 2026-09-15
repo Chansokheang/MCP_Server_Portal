@@ -177,7 +177,7 @@ def reset() -> dict:
 
 # --- agent tokens (what AI agents present to the gateway) ------------------
 def issue_agent_token(state: dict, *, label: str, user_id: str, role: str, company: str,
-                      agent: str, ttl_days: int, created_by: str) -> tuple[str, dict]:
+                      agent: str, ttl_days: int, created_by: str, groups: list[str] | None = None) -> tuple[str, dict]:
     token = "bz_" + secrets.token_urlsafe(32)
     token_id = "tok_" + secrets.token_hex(4)
     now = time.time()
@@ -188,6 +188,8 @@ def issue_agent_token(state: dict, *, label: str, user_id: str, role: str, compa
         "sub": user_id,
         "role": role,
         "company": company,
+        # Access groups decide which backends this caller may use (see check_provider_access).
+        "groups": sorted({g.strip() for g in (groups or []) if g.strip()}),
         "scopes": ["bizplay:read"] + (["bizplay:write"] if role in ("employee", "manager") else []),
         "created_at": now,
         "expires_at": now + ttl_days * 86400,
@@ -222,13 +224,46 @@ def tool_policy(state: dict, provider_id: str, tool: str) -> dict | None:
     return copy.deepcopy(provider["tools"].get(tool))
 
 
-def check_tool_access(state: dict, provider_id: str, tool: str, role: str) -> tuple[bool, str]:
-    """Return (allowed, reason)."""
+ACCESS_MODES = {
+    "everyone": "Everyone with a valid agent token (or the env identity).",
+    "groups": "Only callers whose token carries one of the listed access groups.",
+    "companies": "Only callers whose token belongs to one of the listed companies.",
+}
+
+
+def check_provider_access(state: dict, provider_id: str, claims: dict | None) -> tuple[bool, str]:
+    """Is this caller entitled to the backend at all? (Who may use it, before per-tool policy.)"""
+    provider = state["providers"].get(provider_id)
+    if provider is None:
+        return False, f"unknown provider '{provider_id}'"
+    access = provider.get("access") or {"mode": "everyone"}
+    mode = access.get("mode", "everyone")
+    claims = claims or {}
+    if mode == "groups":
+        mine = set(claims.get("groups") or [])
+        wanted = set(access.get("groups") or [])
+        if not mine & wanted:
+            return False, (f"'{provider['name']}' is limited to access group(s) {', '.join(sorted(wanted)) or '(none)'}; "
+                           f"this caller has {', '.join(sorted(mine)) or 'no groups'}")
+    elif mode == "companies":
+        company = str(claims.get("company") or "")
+        wanted = [str(c) for c in access.get("companies") or []]
+        if company not in wanted:
+            return False, f"'{provider['name']}' is limited to company(ies) {', '.join(wanted) or '(none)'}; this caller is {company or 'unknown'}"
+    return True, ""
+
+
+def check_tool_access(state: dict, provider_id: str, tool: str, role: str, claims: dict | None = None) -> tuple[bool, str]:
+    """Return (allowed, reason). With claims, the caller's entitlement to the backend is checked first."""
     provider = state["providers"].get(provider_id)
     if provider is None:
         return False, f"unknown provider '{provider_id}'"
     if provider.get("status") != "published":
         return False, f"provider '{provider_id}' is not published"
+    if claims is not None:
+        ok, reason = check_provider_access(state, provider_id, claims)
+        if not ok:
+            return False, reason
     policy = tool_policy(state, provider_id, tool)
     if policy is None:
         return False, f"tool '{tool}' is not registered for provider '{provider_id}'"

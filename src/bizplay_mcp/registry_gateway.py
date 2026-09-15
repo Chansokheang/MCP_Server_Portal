@@ -127,7 +127,7 @@ class GovernanceMiddleware(Middleware):
                 continue
             if only is not None and parts[0] != only:
                 continue
-            allowed, _ = policy_store.check_tool_access(state, parts[0], parts[1], role)
+            allowed, _ = policy_store.check_tool_access(state, parts[0], parts[1], role, principal.claims)
             if not allowed:
                 continue
             update: dict[str, Any] = {"name": parts[1]} if only else {}
@@ -165,7 +165,7 @@ class GovernanceMiddleware(Middleware):
         pid, op = parts
 
         state = policy_store.load()
-        allowed, reason = policy_store.check_tool_access(state, pid, op, role)
+        allowed, reason = policy_store.check_tool_access(state, pid, op, role, principal.claims)
         if not allowed:
             audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
             raise ToolError(f"Access denied: {reason}")

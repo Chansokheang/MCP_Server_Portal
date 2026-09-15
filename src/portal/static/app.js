@@ -618,15 +618,36 @@ pages.access = async () => {
   const d = await api("GET", `/api/registry/${pid}/tools`);
   const total = d.items.length, enabled = d.items.filter((t) => t.enabled).length;
   const reads = d.items.filter((t) => t.kind === "read").length, writes = total - reads;
+  const provider = reg.items.find((p) => p.id === pid) || {};
+  const access = provider.access || { mode: "everyone", groups: [], companies: [] };
+  const known = (await api("GET", "/api/groups")).items;
   renderTabs(reg.items.map((p) => ({ key: p.id, label: p.name, icon: "plugs-connected", count: p.tools_enabled })), pid,
     (k) => { setHash("access", { p: k }); pages.access(); });
 
+  const whoLabel = access.mode === "groups" ? `groups: ${access.groups.join(", ")}` : access.mode === "companies" ? `companies: ${access.companies.join(", ")}` : "everyone with a token";
   $("#page").innerHTML = `
     <div class="stats">
       <div class="stat"><span class="num">${total}</span><span class="lbl">Endpoints in this API</span></div>
       <div class="stat"><span class="num" style="color:var(--green-ink)">${enabled}</span><span class="lbl">Enabled for agents</span></div>
       <div class="stat"><span class="num">${reads}</span><span class="lbl">Read tools</span></div>
       <div class="stat"><span class="num" style="color:var(--amber-ink)">${writes}</span><span class="lbl">Write tools, ${d.items.filter((t) => t.kind === "write" && t.enabled).length} enabled</span></div>
+    </div>
+    <div>
+      <div class="section-head"><h2 class="section-title">Who can use ${esc(provider.name || pid)}</h2>${access.mode === "everyone" ? chip("", "Everyone", "users") : chip("lilac", whoLabel, "users-three")}</div>
+      <div class="card settings-list" id="access-card">
+        <div class="setting"><div class="setting-text"><strong>Entitlement</strong><p class="muted small">Decides which callers see this backend at all on the gateway address. Everyone else gets no tools from it and is refused if they try. Tool policy below applies on top.</p></div>
+          <div class="setting-ctl"><select id="acc-mode" aria-label="Who can use this backend">
+            <option value="everyone" ${access.mode === "everyone" ? "selected" : ""}>Everyone with a token</option>
+            <option value="groups" ${access.mode === "groups" ? "selected" : ""}>Only these access groups</option>
+            <option value="companies" ${access.mode === "companies" ? "selected" : ""}>Only these companies</option>
+          </select></div></div>
+        <div class="setting ${access.mode === "groups" ? "" : "hidden"}" id="acc-groups-row"><div class="setting-text"><strong>Access groups</strong><p class="muted small">Comma separated. A caller needs any one of them on their agent token${known.length ? `. In use: ${esc(known.join(", "))}` : ""}.</p></div>
+          <div class="setting-ctl"><input id="acc-groups" class="ctl-wide" value="${esc(access.groups.join(", "))}" placeholder="finance, hr" list="acc-known"><datalist id="acc-known">${known.map((g) => `<option value="${esc(g)}">`).join("")}</datalist></div></div>
+        <div class="setting ${access.mode === "companies" ? "" : "hidden"}" id="acc-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids, matched against the company on the caller's token.</p></div>
+          <div class="setting-ctl"><input id="acc-companies" class="ctl-wide" value="${esc(access.companies.join(", "))}" placeholder="1078836129, 2200000000"></div></div>
+        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next call, on the shared gateway and on this backend's own MCP server alike.</p></div>
+          <div class="setting-ctl"><button class="btn solid small" id="acc-save"><i class="ph ph-check"></i> Save entitlement</button></div></div>
+      </div>
     </div>
     <div>
       <h2 class="section-title">Tool policy</h2>
@@ -641,6 +662,17 @@ pages.access = async () => {
     </div>
     <div class="callout"><i class="ph ph-shield-check"></i><span>Changes apply to the gateway on the next call. The gateway also checks that the role inside the agent token matches the provider's own record and limits results to the caller's company.</span></div>`;
 
+  $("#acc-mode").onchange = (e) => {
+    $("#acc-groups-row").classList.toggle("hidden", e.target.value !== "groups");
+    $("#acc-companies-row").classList.toggle("hidden", e.target.value !== "companies");
+  };
+  $("#acc-save").onclick = async () => {
+    try {
+      const r = await api("PATCH", `/api/registry/${pid}`, { access: { mode: $("#acc-mode").value, groups: $("#acc-groups").value, companies: $("#acc-companies").value } });
+      toast("Entitlement saved", r.access.mode === "everyone" ? "Everyone with a token can use it" : `Limited to ${r.access.mode}: ${(r.access[r.access.mode] || []).join(", ")}`);
+      pages.access();
+    } catch (err) { toast("Save failed", err.message, 4500); }
+  };
   $("#page").querySelectorAll("tr[data-name] input").forEach((inp) => inp.onchange = async () => {
     const tr = inp.closest("tr"); const name = tr.dataset.name;
     const body = {
@@ -674,7 +706,7 @@ pages.tokens = async () => {
       <tr><th>Token</th><th>Bizplay user</th><th>Company</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr>
       ${items.length ? items.map((t, i) => `<tr title="Issued by ${esc(t.created_by)}">
         <td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub"><span class="mono">${esc(t.hint)}</span> · ${esc(t.agent)}</div></span></span></td>
-        <td class="nowrap"><span class="mono">${esc(t.sub)}</span><div class="sub">${esc(t.role)}</div></td>
+        <td class="nowrap"><span class="mono">${esc(t.sub)}</span><div class="sub">${esc(t.role)}${(t.groups || []).length ? ` · ${esc(t.groups.join(", "))}` : ""}</div></td>
         <td class="small">${esc(t.company)}</td>
         <td>${stateChip[state(t)]}</td>
         <td class="small nowrap">${esc(fmtDate(t.expires_at))}</td>
@@ -698,6 +730,7 @@ async function issueDialog() {
         <label class="field">Bizplay user id <input name="user_id" value="emp001" required></label>
         <label class="field">Role <select name="role"><option value="employee">employee</option><option value="manager">manager</option></select></label>
         <label class="field">Company <input name="company" value="Bizplay Demo Co."></label>
+        <label class="field">Access groups <input name="groups" placeholder="finance, hr (comma separated)"><span class="muted small">Backends limited to groups are visible only to tokens that carry one of them.</span></label>
         <label class="field">AI agent <select name="agent"><option>Claude Desktop</option><option>Claude.ai</option><option>Microsoft Copilot Studio</option><option>Salesforce Agentforce</option></select></label>
         <label class="field">Expires in (days) <input name="ttl_days" type="number" value="30" min="1" max="365"></label>
       </div>

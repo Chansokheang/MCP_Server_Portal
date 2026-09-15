@@ -95,7 +95,7 @@ async def guarded(tool: str, arguments: dict):
         audit.record(user_id, tool, arguments, "denied", "token role mismatch", via=via)
         raise ToolError("Access denied: token role does not match the Bizplay user record")
 
-    allowed, reason = policy_store.check_tool_access(policy_store.load(), PROVIDER_ID, tool, user["role"])
+    allowed, reason = policy_store.check_tool_access(policy_store.load(), PROVIDER_ID, tool, user["role"], principal.claims)
     if not allowed:
         audit.record(user_id, tool, arguments, "denied", reason, via=via)
         raise ToolError(f"Access denied: {reason}")

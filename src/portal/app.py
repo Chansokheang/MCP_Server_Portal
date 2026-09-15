@@ -190,6 +190,7 @@ def _public_provider(p: dict) -> dict:
     cfg = p.get("oauth") or {}
     out["oauth"] = {k: v for k, v in cfg.items() if k != "client_secret"} | {"has_client_secret": bool(cfg.get("client_secret"))}
     out["oauth_ready"] = _oauth_ready(p)
+    out["access"] = p.get("access") or {"mode": "everyone", "groups": [], "companies": []}
     out["connections"] = len(oauth.public_connections(policy_store.load(), p["id"])) if p.get("auth_mode") == "oauth" else 0
     out["has_spec"] = bool(p.get("spec"))
     out["standalone_url"] = policy_store.standalone_url(p)
@@ -238,6 +239,33 @@ def _oauth_config(body: dict, existing: dict | None = None) -> dict:
         if cfg.get(key) and not cfg[key].startswith("http"):
             raise ApiError(400, f"{key} must start with http")
     return cfg
+
+
+def _listed(value) -> list[str]:
+    """A list from either a JSON list or a comma-separated string, trimmed and de-duplicated."""
+    items = value.split(",") if isinstance(value, str) else list(value or [])
+    return sorted({str(v).strip() for v in items if str(v).strip()})
+
+
+def _access_config(body: dict) -> dict:
+    """Who may use a backend: everyone, listed access groups, or listed companies."""
+    mode = body.get("mode") or "everyone"
+    if mode not in policy_store.ACCESS_MODES:
+        raise ApiError(400, f"access mode must be one of {', '.join(policy_store.ACCESS_MODES)}")
+    cfg = {"mode": mode, "groups": _listed(body.get("groups")), "companies": _listed(body.get("companies"))}
+    if mode == "groups" and not cfg["groups"]:
+        raise ApiError(400, "list at least one access group, or choose everyone")
+    if mode == "companies" and not cfg["companies"]:
+        raise ApiError(400, "list at least one company, or choose everyone")
+    return cfg
+
+
+async def list_groups(request: Request):
+    """Access groups in use anywhere, so dialogs can suggest them."""
+    state = policy_store.load()
+    groups = {g for t in state["agent_tokens"].values() for g in t.get("groups") or []}
+    groups |= {g for p in state["providers"].values() for g in (p.get("access") or {}).get("groups") or []}
+    return JSONResponse({"items": sorted(groups)})
 
 
 def _oauth_ready(p: dict) -> bool:
@@ -377,6 +405,8 @@ async def update_provider(request: Request):
             note = f"Tool list refreshed: {len(fresh)} tool(s)."
     if "oauth" in body and isinstance(body["oauth"], dict):
         p["oauth"] = _oauth_config(body["oauth"], p.get("oauth"))
+    if "access" in body and isinstance(body["access"], dict):
+        p["access"] = _access_config(body["access"])
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
         # One gateway, one public address: remember it for the next registration.
@@ -711,10 +741,13 @@ async def issue_token(request: Request):
     ttl = int(body.get("ttl_days") or state["security"]["token_ttl_days"])
     if not 1 <= ttl <= 365:
         raise ApiError(400, "ttl_days must be between 1 and 365")
+    groups = body.get("groups") or []
+    if isinstance(groups, str):
+        groups = groups.split(",")
     token, record = policy_store.issue_agent_token(
         state, label=(body.get("label") or "Untitled").strip(), user_id=(body.get("user_id") or "").strip(),
         role=role, company=(body.get("company") or "Bizplay Demo Co.").strip(),
-        agent=body.get("agent") or "Claude Desktop", ttl_days=ttl, created_by=request.state.user,
+        agent=body.get("agent") or "Claude Desktop", ttl_days=ttl, created_by=request.state.user, groups=groups,
     )
     if not record["sub"]:
         raise ApiError(400, "user_id is required")
@@ -815,6 +848,7 @@ app = Starlette(
         Route("/api/registry/{pid}/refresh-tools", refresh_tools, methods=["POST"]),
         Route("/api/registry/{pid}/{action}", set_provider_status, methods=["POST"]),
         Route("/oauth/callback", oauth_callback),
+        Route("/api/groups", list_groups),
         Route("/api/tokens", list_tokens),
         Route("/api/tokens", issue_token, methods=["POST"]),
         Route("/api/tokens/{tid}/revoke", revoke_token, methods=["POST"]),
