@@ -315,7 +315,7 @@ pages.registry = async () => {
         <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
         <td class="small">${p.status === "published" ? `<div>shared gateway${p.tool_prefix ? ` <span class="mono">${esc(p.tool_prefix)}*</span>` : ""}</div>` : `<div class="muted">not published</div>`}${p.standalone ? `<div class="sub mono">${esc(p.standalone_url)}</div>` : ""}</td>
         <td class="actions">
-          ${p.has_spec || p.kind === "mcp" ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy"}</button>` : `<button class="btn small link" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> Setup</button>`}
+          ${p.has_spec ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy"}</button>` : `<button class="btn small link" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> Setup</button>`}
         </td>
       </tr>`).join("")
       : `<tr><td colspan="6">${emptyState("plugs-connected", "No backends here", "Register a REST API with its OpenAPI spec, or an MCP server that already exists. Neither is changed.")}</td></tr>`}
@@ -417,7 +417,7 @@ function gatewayDialog(g, servable) {
 // ---- MCP Servers: one deployed server per product, next to the shared gateway ----
 pages.servers = async () => {
   const d = await api("GET", "/api/registry");
-  const deployable = d.items.filter((p) => p.has_spec || p.kind === "mcp");
+  const deployable = d.items.filter((p) => p.has_spec);  // MCP-kind backends are already MCP servers
   const live = deployable.filter((p) => p.standalone);
   const candidates = deployable.filter((p) => !p.standalone);
   const filter = hashParam("f") || "deployed";
@@ -1028,7 +1028,7 @@ pages.provider = async () => {
   const d = await api("GET", `/api/registry/${pid}/tools`);
   const conns = p.auth_mode === "oauth" ? (await api("GET", `/api/registry/${pid}/connections`)).items : [];
   const enabled = d.items.filter((t) => t.enabled);
-  const canDeploy = p.has_spec || p.kind === "mcp";
+  const canDeploy = !!p.has_spec;  // an MCP-kind backend is already an MCP server
   $("#page-title").textContent = p.name;
   crumbs({ page: "registry", label: "MCP Registry" }, { page: "provider", label: p.name });
   pageActions(`<button class="btn" id="head-back"><i class="ph ph-arrow-left"></i> All backends</button>`);
@@ -1037,10 +1037,10 @@ pages.provider = async () => {
 
   // Every address this backend answers on, with a link to its connect instructions.
   const served = [];
-  if (canDeploy && p.status === "published") served.push({ label: "Everything", url: SERVER.public_mcp_url || location.origin + "/mcp", href: "#gateway?g=", note: "shared endpoint, every backend the caller is entitled to" });
+  if ((p.has_spec || p.kind === "mcp") && p.status === "published") served.push({ label: "Everything", url: SERVER.public_mcp_url || location.origin + "/mcp", href: "#gateway?g=", note: "shared endpoint, every backend the caller is entitled to" });
   gws.items.filter((g) => g.backends.some((b) => b.id === pid)).forEach((g) => served.push({ label: g.name, url: g.url, href: `#gateway?g=${encodeURIComponent(g.id)}`, note: "named gateway" }));
   if (p.standalone) served.push({ label: `${p.name} (own MCP server)`, url: p.standalone_url, href: `#gateway?s=${encodeURIComponent(pid)}`, note: "plain tool names" });
-  if (!canDeploy) served.push({ label: "Curated Bizplay gateway", url: p.mcp_url, href: "", note: "hand-written tools, served by its own process" });
+  if (!p.has_spec && p.kind !== "mcp") served.push({ label: "Curated Bizplay gateway", url: p.mcp_url, href: "", note: "hand-written tools, served by its own process" });
 
   const backendLabel = p.kind === "mcp" ? "Upstream MCP server" : "Upstream API";
   $("#page").innerHTML = `

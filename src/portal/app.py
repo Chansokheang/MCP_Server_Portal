@@ -469,7 +469,9 @@ async def set_provider_status(request: Request):
         raise ApiError(400, "action must be publish, unpublish, deploy or undeploy")
     if action in ("publish", "deploy"):
         _publish_gate(state, p)
-    if action == "deploy" and not (p.get("spec") or p.get("kind") == "mcp"):
+    if action == "deploy" and p.get("kind") == "mcp":
+        raise ApiError(409, "this backend is already an MCP server; put it in a named gateway instead")
+    if action == "deploy" and not p.get("spec"):
         raise ApiError(409, "the curated Bizplay provider is already its own server; deploy applies to registered APIs")
     if action in ("publish", "unpublish"):
         p["status"] = "published" if action == "publish" else "draft"

@@ -257,6 +257,11 @@ async def test_deploy_publishes_and_needs_a_credential_in_bearer_mode(admin):
     assert (await admin.post("/api/registry/bizplay/deploy")).status_code == 409, "the curated server is not a registered API"
 
 
+async def test_an_mcp_backend_cannot_be_deployed_again(admin, tasks):
+    r = await admin.post(f"/api/registry/{tasks}/deploy")
+    assert r.status_code == 409 and "already an MCP server" in r.json()["error"]
+
+
 # --- the portal's own origin is the default endpoint --------------------------------------
 async def test_default_endpoint_is_the_portal_origin(admin):
     cfg = (await admin.get("/api/config")).json()
