@@ -318,6 +318,20 @@ pre { background: var(--tile); border: 1px solid var(--line); color: var(--ink);
 .token-box { display: flex; gap: 8px; align-items: center; }
 .token-box code { flex: 1; word-break: break-all; background: var(--tile); border: 1px solid var(--line); padding: 10px 12px; border-radius: var(--r-tile); font-family: var(--font-mono); font-size: 12px; }
 
+/* ---------- client guides, all on one page ---------- */
+.guides { display: grid; gap: 8px; }
+.guide { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+.guide summary { display: flex; align-items: center; gap: 10px; padding: 12px 16px; cursor: pointer; list-style: none; font-weight: 600; }
+.guide summary::-webkit-details-marker { display: none; }
+.guide summary .guide-title { display: flex; align-items: center; gap: 8px; flex: 1; }
+.guide summary .guide-title i { font-size: 18px; color: var(--ink-3); }
+.guide summary .caret { color: var(--ink-3); transition: transform .15s ease; }
+.guide[open] summary { border-bottom: 1px solid var(--line); }
+.guide[open] summary .caret { transform: rotate(180deg); }
+.guide-body { padding: 12px 16px 16px; }
+.guide-body .steps { margin-top: 10px; }
+.guide-body .step { background: var(--tile); }
+
 /* ---------- setup steps (provider page) ---------- */
 .steps { display: grid; gap: 12px; margin-top: 14px; }
 .step { display: grid; grid-template-columns: 26px 1fr; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 16px 18px; }

@@ -1027,9 +1027,8 @@ pages.provider = async () => {
   crumbs({ page: "registry", label: "MCP Registry" }, { page: "provider", label: p.name });
   pageActions(`<button class="btn" id="head-back"><i class="ph ph-arrow-left"></i> All backends</button><button class="btn solid" id="head-command"><i class="ph ph-terminal-window"></i> Connect command</button>`);
   $("#head-back").onclick = () => { location.hash = "registry"; };
-  renderTabs(Object.entries(guides).map(([k, v]) => ({ key: k, label: v.label, icon: v.icon })), key,
-    (k) => { setHash("provider", { p: pid, c: k, ...(via.standalone ? { via: "standalone" } : {}) }); pages.provider(); },
-    p.status === "published" ? { title: "Live", sub: `${enabled.length} tools reachable by agents` } : null);
+  // One page for every client: the endpoint is the same, only the paste differs.
+  renderTabs([], "", () => {}, p.status === "published" ? { title: "Live", sub: `${enabled.length} tools reachable by agents` } : null);
 
   const shown = enabled.slice(0, 10);
   const backendLabel = p.kind === "mcp" ? "Upstream MCP server" : "Upstream API";
@@ -1081,13 +1080,22 @@ pages.provider = async () => {
       : `<p class="card-desc" style="-webkit-line-clamp:4">Gives ${esc(p.name)} an endpoint of its own at <span class="mono">${esc(p.standalone_url)}</span>, serving only its tools with no prefix, the way a vendor's own MCP app appears in claude.ai or ChatGPT. It runs inside this gateway, so it needs no extra process and keeps the same tokens, tool policy, company scoping and audit log. It also publishes the backend on the shared gateway.</p>`}
     </div>` : ""}
     <div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px;flex-wrap:wrap">
-        <h2 class="section-title" style="margin:0">Use ${esc(p.name)} from ${esc(g.label)}</h2>
-        ${g.ready ? chip("green", "Works today", "check") : chip("amber", "Needs hosting and OAuth", "warning")}
+      <div class="section-head">
+        <h2 class="section-title">How to connect</h2>
         ${via.standalone ? chip("green", "via its own server", "rocket-launch") : chip("", "via the shared gateway", "squares-four")}
       </div>
-      <p class="muted" style="max-width:76ch">${esc(g.lead)}</p>
-      <div class="steps">${g.steps.map((s, i) => `<div class="step"><span class="step-n">${i + 1}</span><div class="step-b"><strong>${esc(s.t)}</strong>${s.b}</div></div>`).join("")}</div>
+      <div class="card" style="margin-bottom:12px">
+        <dl class="kv"><dt>Endpoint</dt><dd id="p-connect-url">${esc(via.url)}</dd><dt>Transport</dt><dd>streamable HTTP</dd><dt>Auth</dt><dd>${SERVER.require_agent_token === false ? "none required (token requirement is off)" : "Authorization: Bearer &lt;agent token&gt;"}</dd><dt>Tool names</dt><dd>${esc(via.prefix ? via.prefix + "*" : "no prefix")}</dd></dl>
+        <p class="muted small" style="margin:0">Same endpoint for every client below. Open the one you use; <strong>Connect command</strong> at the top prints a ready-to-paste version with a token.</p>
+      </div>
+      <div class="guides">${Object.entries(guides).map(([k, v]) => `
+        <details class="guide" ${k === key ? "open" : ""} data-guide="${esc(k)}">
+          <summary><span class="guide-title"><i class="ph ph-${esc(v.icon)}"></i> ${esc(v.label)}</span>${v.ready ? chip("green", "Works today", "check") : chip("amber", "Needs hosting and OAuth", "warning")}<i class="ph ph-caret-down caret"></i></summary>
+          <div class="guide-body">
+            <p class="muted" style="max-width:76ch">${esc(v.lead)}</p>
+            <div class="steps">${v.steps.map((s, i) => `<div class="step"><span class="step-n">${i + 1}</span><div class="step-b"><strong>${esc(s.t)}</strong>${s.b}</div></div>`).join("")}</div>
+          </div>
+        </details>`).join("")}</div>
     </div>
     <div>
       <h2 class="section-title">Tools this ${p.kind === "mcp" ? "server" : "API"} exposes to agents</h2>
