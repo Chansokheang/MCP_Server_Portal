@@ -69,6 +69,10 @@ def reconcile_tool_names(provider: dict) -> list[tuple[str, str]]:
     renames = []
     for old in list(provider["tools"]):
         if old in generated:
+            # Rows from before the portal kept the generated text: fill it in so the admin sees it.
+            if not provider["tools"][old].get("generated") and generated[old]["generated"]:
+                provider["tools"][old]["generated"] = generated[old]["generated"]
+                renames.append((old, old))
             continue
         new = by_operation.get(old)
         if new and new not in provider["tools"]:
