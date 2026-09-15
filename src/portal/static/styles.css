@@ -307,6 +307,24 @@ pre { background: var(--tile); border: 1px solid var(--line); color: var(--ink);
 .empty .mark i { font-size: 22px; }
 .empty strong { color: var(--ink); font-weight: 600; }
 
+/* ---------- charts ---------- */
+.chart-card { gap: 10px; }
+.viz { width: 100%; height: auto; display: block; font-family: var(--font-sans); }
+.viz .grid { stroke: var(--line); stroke-width: 1; }
+.viz .ax { font-size: 11px; fill: var(--ink-3); }
+.viz .lbl { font-size: 12px; fill: var(--ink-2); }
+.viz .val { font-size: 12px; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.viz .col:hover rect:not([fill="transparent"]), .viz .bar:hover rect:not([fill="transparent"]) { filter: brightness(.9); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.viz-table summary { cursor: pointer; font-size: 12px; color: var(--ink-3); list-style: none; }
+.viz-table summary::-webkit-details-marker { display: none; }
+.viz-table summary::before { content: "▸ "; } .viz-table[open] summary::before { content: "▾ "; }
+.viz-table .table-wrap { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-tile); }
+.viz-table td, .viz-table th { padding: 7px 10px; font-size: 12px; }
+.viz-tip { position: fixed; z-index: 40; pointer-events: none; background: var(--ink); color: #fff; font-size: 12px; padding: 6px 9px; border-radius: 6px; box-shadow: var(--shadow); max-width: 320px; }
+
 /* ---------- error / not found ---------- */
 .error-page { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 48px 24px; text-align: center; display: grid; justify-items: center; gap: 6px; }
 .error-page .error-code { font-size: 56px; font-weight: 800; letter-spacing: -0.03em; color: var(--primary); line-height: 1; margin: 0 0 6px; }

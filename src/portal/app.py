@@ -166,11 +166,56 @@ def _security_checklist(state: dict) -> list[dict]:
     ]
 
 
+def _backend_of(state: dict, tool: str) -> str | None:
+    """Which backend a logged tool name belongs to: longest prefix wins; unprefixed names are the curated server."""
+    if tool.startswith("oauth:"):
+        return None
+    best = None
+    for p in state["providers"].values():
+        prefix = p.get("tool_prefix") or ""
+        if prefix and tool.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+            best = (prefix, p["name"])
+    if best:
+        return best[1]
+    curated = state["providers"].get("bizplay")
+    return curated["name"] if curated and tool in curated["tools"] else "Other"
+
+
+def _usage(state: dict, days: int = 14) -> dict:
+    """Charts for the overview, from the audit log: per day by outcome, and per backend."""
+    entries = audit.tail(5000)
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    day_keys = [time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400 * i)) for i in range(days - 1, -1, -1)]
+    per_day = {d: {"date": d, "ok": 0, "denied": 0, "error": 0} for d in day_keys}
+    per_backend: dict[str, dict] = {}
+    for e in entries:
+        day = str(e.get("ts", ""))[:10]
+        outcome = e.get("outcome") if e.get("outcome") in ("ok", "denied", "error") else "error"
+        if day in per_day:
+            per_day[day][outcome] += 1
+        backend = _backend_of(state, str(e.get("tool", "")))
+        if backend and day in per_day:
+            row = per_backend.setdefault(backend, {"backend": backend, "calls": 0, "denied": 0, "error": 0})
+            row["calls"] += 1
+            if outcome != "ok":
+                row[outcome] += 1
+    ranked = sorted(per_backend.values(), key=lambda r: -r["calls"])
+    top, rest = ranked[:6], ranked[6:]
+    if rest:
+        top.append({"backend": "Other", "calls": sum(r["calls"] for r in rest), "denied": sum(r["denied"] for r in rest),
+                    "error": sum(r["error"] for r in rest), "folded": len(rest)})
+    return {"days": days, "today": today, "calls_by_day": list(per_day.values()), "calls_by_backend": top,
+            "total": sum(v["ok"] + v["denied"] + v["error"] for v in per_day.values())}
+
+
 async def overview(request: Request):
     state = policy_store.load()
     now = time.time()
     tokens = state["agent_tokens"].values()
     checklist = _security_checklist(state)
+    tools_by_backend = sorted(({"backend": p["name"], "id": p["id"], "enabled": sum(t["enabled"] for t in p["tools"].values()),
+                                "total": len(p["tools"]), "published": p.get("status") == "published"}
+                               for p in state["providers"].values()), key=lambda r: -r["total"])
     return JSONResponse({
         "providers": len(state["providers"]),
         "published": sum(p["status"] == "published" for p in state["providers"].values()),
@@ -179,6 +224,8 @@ async def overview(request: Request):
         "audit_recent": audit.tail(8),
         "checklist": checklist,
         "score": round(100 * sum(c["ok"] for c in checklist) / len(checklist)),
+        "usage": _usage(state),
+        "tools_by_backend": tools_by_backend,
     })
 
 

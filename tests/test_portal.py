@@ -273,3 +273,16 @@ async def test_gateway_404_page_for_browsers(admin):
     finally:
         server.should_exit = True
         await task
+
+
+async def test_overview_chart_data(admin, monkeypatch):
+    from bizplay_mcp import audit
+    audit.record("emp001", "get_card_balance", {}, "ok", via="env")
+    audit.record("emp001", "get_card_balance", {}, "denied", "role", via="env")
+    audit.record("emp001", "oauth:flow", {}, "ok", "account linked", via="portal")
+    ov = (await admin.get("/api/overview")).json()
+    usage = ov["usage"]
+    assert usage["days"] == 14 and len(usage["calls_by_day"]) == 14 and usage["calls_by_day"][-1]["date"] == usage["today"]
+    assert usage["calls_by_day"][-1]["ok"] == 2 and usage["calls_by_day"][-1]["denied"] == 1, "the oauth link counts as a call day entry but not a backend"
+    assert usage["calls_by_backend"] == [{"backend": "Bizplay Expense API", "calls": 2, "denied": 1, "error": 0}]
+    assert ov["tools_by_backend"][0]["backend"] == "Bizplay Expense API" and ov["tools_by_backend"][0]["enabled"] == 8

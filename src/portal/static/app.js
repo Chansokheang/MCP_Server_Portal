@@ -247,16 +247,103 @@ function renderTabs(items, active, onPick, note) {
 }
 
 // ---- Overview ----
+// ---- charts (inline SVG; colors validated for CVD on the white surface) ----
+const VIZ = { ok: "#008300", denied: "#eda100", error: "#e34948", series: "#2f6bff", track: "#dbe4f5" };
+const fmtDay = (iso) => { const [y, m, d] = iso.split("-"); return `${Number(m)}/${Number(d)}`; };
+const niceMax = (n) => { if (n <= 5) return 5; const p = Math.pow(10, Math.floor(Math.log10(n))); const u = n / p; return (u <= 1 ? 1 : u <= 2 ? 2 : u <= 5 ? 5 : 10) * p; };
+
+/** Stacked columns: one per day, ok / denied / error, 2px surface gaps, rounded top segment, hover tooltip. */
+function callsByDayChart(rows) {
+  const W = 640, H = 220, padL = 36, padR = 8, padT = 12, padB = 26;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const max = niceMax(Math.max(1, ...rows.map((r) => r.ok + r.denied + r.error)));
+  const slot = innerW / rows.length, bw = Math.min(24, slot * 0.6);
+  const y = (v) => padT + innerH - (v / max) * innerH;
+  const ticks = [0, max / 2, max];
+  const cols = rows.map((r, i) => {
+    const x = padL + i * slot + (slot - bw) / 2;
+    const stack = ["ok", "denied", "error"].filter((k) => r[k] > 0);
+    let acc = 0;
+    const segs = stack.map((k, j) => {
+      const y0 = y(acc + r[k]), y1 = y(acc); acc += r[k];
+      const gap = j < stack.length - 1 ? 2 : 0;
+      const h = Math.max(0, y1 - y0 - gap);
+      const last = j === stack.length - 1;
+      return `<rect x="${x}" y="${y0}" width="${bw}" height="${h}" fill="${VIZ[k]}" ${last ? 'rx="4"' : ""}></rect>${last ? `<rect x="${x}" y="${y0 + Math.min(4, h)}" width="${bw}" height="${Math.max(0, h - Math.min(4, h))}" fill="${VIZ[k]}"></rect>` : ""}`;
+    }).join("");
+    const total = r.ok + r.denied + r.error;
+    const tip = `${fmtDay(r.date)} · ${total} call${total === 1 ? "" : "s"} · ok ${r.ok}, denied ${r.denied}, error ${r.error}`;
+    return `<g class="col" data-tip="${esc(tip)}"><rect x="${padL + i * slot}" y="${padT}" width="${slot}" height="${innerH}" fill="transparent"></rect>${segs}</g>`;
+  }).join("");
+  const labels = rows.map((r, i) => (rows.length <= 14 || i % 2 === 0) ? `<text x="${padL + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle" class="ax">${fmtDay(r.date)}</text>` : "").join("");
+  return `<svg class="viz" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gateway calls per day">
+    ${ticks.map((t) => `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" class="grid"></line><text x="${padL - 6}" y="${y(t) + 4}" text-anchor="end" class="ax">${t}</text>`).join("")}
+    ${cols}${labels}</svg>`;
+}
+
+/** Horizontal bars, one series, value at the tip; denied/error share shown in the tooltip. */
+function callsByBackendChart(rows) {
+  const W = 640, rowH = 30, padL = 8, padR = 56, labelW = 170;
+  const H = Math.max(60, rows.length * rowH + 8);
+  const max = Math.max(1, ...rows.map((r) => r.calls));
+  const innerW = W - padL - padR - labelW;
+  return `<svg class="viz" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gateway calls by backend">
+    ${rows.map((r, i) => {
+      const yy = 4 + i * rowH, w = Math.max(2, (r.calls / max) * innerW);
+      const tip = `${r.backend} · ${r.calls} call${r.calls === 1 ? "" : "s"}${r.denied || r.error ? ` · denied ${r.denied}, error ${r.error}` : ""}${r.folded ? ` · ${r.folded} backends folded` : ""}`;
+      return `<g class="bar" data-tip="${esc(tip)}">
+        <rect x="0" y="${yy}" width="${W}" height="${rowH}" fill="transparent"></rect>
+        <text x="${padL + labelW - 10}" y="${yy + rowH / 2 + 4}" text-anchor="end" class="lbl">${esc(r.backend.length > 24 ? r.backend.slice(0, 23) + "…" : r.backend)}</text>
+        <rect x="${padL + labelW}" y="${yy + 5}" width="${w}" height="${rowH - 10}" fill="${VIZ.series}" rx="4"></rect><rect x="${padL + labelW}" y="${yy + 5}" width="${Math.min(4, w)}" height="${rowH - 10}" fill="${VIZ.series}"></rect>
+        <text x="${padL + labelW + w + 8}" y="${yy + rowH / 2 + 4}" class="val">${r.calls}</text></g>`;
+    }).join("")}</svg>`;
+}
+
+/** Part-to-whole per backend: enabled tools on a track of the total, "enabled / total" at the tip. */
+function toolsByBackendChart(rows) {
+  const W = 640, rowH = 30, padL = 8, padR = 74, labelW = 170;
+  const H = Math.max(60, rows.length * rowH + 8);
+  const max = Math.max(1, ...rows.map((r) => r.total));
+  const innerW = W - padL - padR - labelW;
+  return `<svg class="viz" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tools enabled per backend">
+    ${rows.map((r, i) => {
+      const yy = 4 + i * rowH, wt = Math.max(2, (r.total / max) * innerW), we = (r.enabled / max) * innerW;
+      const tip = `${r.backend} · ${r.enabled} of ${r.total} tools enabled${r.published ? "" : " · not published"}`;
+      return `<g class="bar" data-tip="${esc(tip)}">
+        <rect x="0" y="${yy}" width="${W}" height="${rowH}" fill="transparent"></rect>
+        <text x="${padL + labelW - 10}" y="${yy + rowH / 2 + 4}" text-anchor="end" class="lbl">${esc(r.backend.length > 24 ? r.backend.slice(0, 23) + "…" : r.backend)}</text>
+        <rect x="${padL + labelW}" y="${yy + 5}" width="${wt}" height="${rowH - 10}" fill="${VIZ.track}" rx="4"></rect>
+        ${we > 0 ? `<rect x="${padL + labelW}" y="${yy + 5}" width="${Math.max(2, we)}" height="${rowH - 10}" fill="${VIZ.series}" rx="4"></rect><rect x="${padL + labelW}" y="${yy + 5}" width="${Math.min(4, we)}" height="${rowH - 10}" fill="${VIZ.series}"></rect>` : ""}
+        <text x="${padL + labelW + wt + 8}" y="${yy + rowH / 2 + 4}" class="val">${r.enabled} / ${r.total}</text></g>`;
+    }).join("")}</svg>`;
+}
+
+const legend = (items) => `<div class="legend">${items.map(([c, l]) => `<span><i style="background:${c}"></i>${esc(l)}</span>`).join("")}</div>`;
+const tableView = (headers, rows) => `<details class="viz-table"><summary>Table view</summary><div class="table-wrap"><table><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</table></div></details>`;
+
+/** One tooltip for every chart on the page: follows the pointer over marks that carry data-tip. */
+function bindChartTips(root) {
+  let tip = document.getElementById("viz-tip");
+  if (!tip) { tip = document.createElement("div"); tip.id = "viz-tip"; tip.className = "viz-tip hidden"; document.body.appendChild(tip); }
+  root.querySelectorAll("[data-tip]").forEach((g) => {
+    g.addEventListener("pointerenter", () => { tip.textContent = g.dataset.tip; tip.classList.remove("hidden"); });
+    g.addEventListener("pointermove", (e) => { tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY + 14}px`; });
+    g.addEventListener("pointerleave", () => tip.classList.add("hidden"));
+  });
+}
+
+// ---- Overview ----
 pages.overview = async () => {
   const d = await api("GET", "/api/overview");
-  const open = d.checklist.filter((c) => !c.ok), passing = d.checklist.length - open.length;
-  const when = (ts) => { const t = new Date(ts); return `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`; };
+  const open = d.checklist.filter((c) => !c.ok).length;
+  const u = d.usage, byDay = u.calls_by_day, byBackend = u.calls_by_backend, tools = d.tools_by_backend;
+  const denied = byDay.reduce((n, r) => n + r.denied, 0), errors = byDay.reduce((n, r) => n + r.error, 0);
   $("#page").innerHTML = `
     <div class="stats">
       <div class="stat"><span class="num">${d.providers}</span><span class="lbl">Registered backends, ${d.published} published</span></div>
       <div class="stat"><span class="num">${d.tools_enabled}</span><span class="lbl">Tools enabled for agents</span></div>
-      <div class="stat"><span class="num">${d.tokens_active}</span><span class="lbl">Active agent tokens</span></div>
-      <div class="stat"><span class="num" style="color:${d.score >= 70 ? "var(--green-ink)" : "var(--amber-ink)"}">${d.score}%</span><span class="lbl">Security score, ${open.length} open item(s)</span></div>
+      <div class="stat"><span class="num">${u.total}</span><span class="lbl">Gateway calls, last ${u.days} days${denied + errors ? ` · ${denied} denied, ${errors} errors` : ""}</span></div>
+      <div class="stat"><span class="num" style="color:${d.score >= 70 ? "var(--green-ink)" : "var(--amber-ink)"}">${d.score}%</span><span class="lbl">Security score, ${open} open item(s)</span></div>
     </div>
     <div class="card flow-card">
       <div class="flow">
@@ -266,23 +353,23 @@ pages.overview = async () => {
         <span class="arrow"><i class="ph ph-arrow-right"></i><br>service or user token</span>
         <div class="node"><strong>REST API or MCP server</strong><span class="muted">unchanged; may also be deployed as its own MCP server</span></div>
       </div>
-      <p class="muted small" style="margin:0">Two separate tokens: one identifies the end user to the gateway, one identifies the gateway to the backend. Neither reaches the model.</p>
+    </div>
+    <div class="card chart-card">
+      <div class="section-head"><h2 class="section-title">Gateway calls per day</h2><a class="btn small link" href="#audit">Audit log</a></div>
+      ${u.total ? callsByDayChart(byDay) + legend([[VIZ.ok, "ok"], [VIZ.denied, "denied"], [VIZ.error, "error"]]) : emptyState("chart-bar", "No calls yet", `Ask an agent something that uses a gateway tool and the last ${u.days} days fill in here.`)}
+      ${u.total ? tableView(["Day", "ok", "denied", "error"], byDay.filter((r) => r.ok + r.denied + r.error).map((r) => [r.date, r.ok, r.denied, r.error])) : ""}
     </div>
     <div class="two">
-      <div>
-        <div class="section-head"><h2 class="section-title">Security checklist</h2><a class="btn small link" href="#security?t=checklist">View all ${d.checklist.length}</a></div>
-        <div class="table-card"><div class="table-wrap"><table>
-          <tr><th style="width:90px">Status</th><th>Check</th></tr>
-          ${open.map((c) => `<tr><td>${chip("red", "Open", "x")}</td><td><strong>${esc(c.label)}</strong><div class="sub">${esc(c.detail)}</div></td></tr>`).join("")}
-          ${open.length ? "" : `<tr><td colspan="2">${emptyState("shield-check", "Every check passes", "Nothing open on the Security page.")}</td></tr>`}
-          ${passing ? `<tr><td>${chip("green", "Pass", "check")}</td><td class="muted">${passing} check(s) passing</td></tr>` : ""}
-        </table></div></div>
+      <div class="card chart-card">
+        <div class="section-head"><h2 class="section-title">Calls by backend</h2><span class="muted small">last ${u.days} days</span></div>
+        ${byBackend.length ? callsByBackendChart(byBackend) + tableView(["Backend", "calls", "denied", "error"], byBackend.map((r) => [r.backend, r.calls, r.denied, r.error])) : emptyState("plugs-connected", "No backend called yet", "Traffic per backend appears here.")}
       </div>
-      <div>
-        <div class="section-head"><h2 class="section-title">Recent gateway activity</h2><a class="btn small link" href="#audit">Audit log</a></div>
-        <div class="table-card">${d.audit_recent.length ? `<div class="table-wrap"><table><tr><th>Time</th><th>User</th><th>Tool</th><th>Result</th></tr>${d.audit_recent.map((e) => `<tr><td class="small mono" style="white-space:nowrap">${esc(when(e.ts))}</td><td><span class="mono">${esc(e.user_id)}</span><div class="sub">${esc(e.via || "env")}</div></td><td class="mono small">${esc(e.tool)}</td><td>${outcomeChip(e.outcome)}</td></tr>`).join("")}</table></div>` : emptyState("chat-circle-dots", "No gateway calls yet", "Ask Claude something that uses a Bizplay tool and it shows up here.")}</div>
+      <div class="card chart-card">
+        <div class="section-head"><h2 class="section-title">Tools enabled per backend</h2><a class="btn small link" href="#registry">Registry</a></div>
+        ${tools.length ? toolsByBackendChart(tools) + legend([[VIZ.series, "enabled"], [VIZ.track, "registered but off"]]) + tableView(["Backend", "enabled", "total"], tools.map((r) => [r.backend, r.enabled, r.total])) : emptyState("plug", "No backends", "Register one in the MCP Registry.")}
       </div>
     </div>`;
+  bindChartTips($("#page"));
 };
 
 // ---- Registry ----
