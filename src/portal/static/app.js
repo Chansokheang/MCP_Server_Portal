@@ -707,7 +707,7 @@ function commandResult(p, token, via) {
 }
 
 async function commandDialog(p, via) {
-  if (SERVER.require_agent_token === false) return commandResult(p, null, via);
+  if (!(via.needsToken ?? (SERVER.require_agent_token !== false))) return commandResult(p, null, via);
   modal(`<h2><i class="ph ph-terminal-window"></i> Connect command</h2>
     <p class="muted">Who should the agent act as? A token is issued for this command.</p>
     <form id="cc-form" class="form">
@@ -969,7 +969,7 @@ function clientGuides(p, tools, via) {
     env,
   }, null, 2);
   // With the agent-token requirement switched off there is no header to send.
-  const needsToken = SERVER.require_agent_token !== false;
+  const needsToken = via.needsToken ?? (SERVER.require_agent_token !== false);
   // mcp-remote refuses plain HTTP to anything but localhost without --allow-http.
   const plainHttpRemote = url.startsWith("http://") && !LOCAL_HOST.test(hostOf(url));
   const remoteArgs = ["-y", "mcp-remote", url, "--transport", "http-only",
@@ -1228,7 +1228,9 @@ pages.gateway = async () => {
   // Tools this endpoint serves, named as the agent sees them.
   const toolLists = await Promise.all(ep.backends.map((p) => api("GET", `/api/registry/${p.id}/tools`)));
   const tools = ep.backends.flatMap((p, i) => toolLists[i].items.filter((t) => t.enabled).map((t) => ({ ...t, name: (ep.prefixed ? (p.tool_prefix || "") : "") + t.name, backend: p.name, backend_id: p.id })));
-  const via = { url: ep.url, prefix: "", standalone: ep.standalone, label: ep.name };
+  const settingsKey = ep.id || "_shared";
+  const [es, known] = await Promise.all([api("GET", `/api/endpoints/${settingsKey}/settings`), api("GET", "/api/groups")]);
+  const via = { url: ep.url, prefix: "", standalone: ep.standalone, label: ep.name, needsToken: es.require_token };
   const guides = clientGuides({ id: ep.id || "bizplay-gateway", name: ep.name, has_spec: true, kind: "openapi", tool_prefix: "" }, tools, via);
   const key = guides[hashParam("c")] ? hashParam("c") : "claude-desktop";
 
@@ -1251,7 +1253,7 @@ pages.gateway = async () => {
           <span class="v mono" id="g-endpoint">${esc(ep.url)}</span></div>
         ${tile("plugs-connected", "Backends", String(ep.backends.length))}
         ${tile("plug", "Tools", String(tools.length))}
-        ${tile("key", "Auth", SERVER.require_agent_token === false ? "none (tokens off)" : "agent token")}
+        ${tile("key", "Auth", es.require_token ? "agent token required" : "no token required")}
       </div>
       <p class="card-desc" style="-webkit-line-clamp:3">${esc(ep.description)}</p>
       <div class="chips">${ep.backends.length ? ep.backends.map((p) => `<a class="chip lilac" href="#provider?p=${encodeURIComponent(p.id)}" title="Open ${esc(p.name)}"><i class="ph ph-arrow-square-out"></i>${esc(p.name)}</a>`).join("") : chip("", "no backends")}</div>
@@ -1261,9 +1263,32 @@ pages.gateway = async () => {
       </div>` : ""}
     </div>
     <div>
-      <div class="section-head"><h2 class="section-title">How to connect</h2>${SERVER.require_agent_token === false ? chip("amber", "Tokens off: every caller is the demo user", "warning") : chip("green", "Agent token required", "key")}</div>
+      <div class="section-head"><h2 class="section-title">Gateway settings</h2>${es.access.mode === "everyone" ? chip("", "Open to every entitled caller", "users") : chip("lilac", `${es.access.mode}: ${(es.access[es.access.mode] || []).join(", ")}`, "users-three")}</div>
+      <div class="card settings-list">
+        <div class="setting"><div class="setting-text"><strong>Require an agent token</strong><p class="muted small">Callers must present a portal-issued token on this endpoint. Applies on the next request; no restart. Without a token every caller is the demo identity and no per-user rule can apply.</p></div>
+          <div class="setting-ctl"><select id="es-require" aria-label="Require an agent token">
+            <option value="inherit" ${es.inherits ? "selected" : ""}>Default (${es.default_require_token ? "required" : "not required"})</option>
+            <option value="true" ${!es.inherits && es.require_token ? "selected" : ""}>Required</option>
+            <option value="false" ${!es.inherits && !es.require_token ? "selected" : ""}>Not required</option>
+          </select></div></div>
+        <div class="setting"><div class="setting-text"><strong>Who can use this gateway</strong><p class="muted small">Checked before anything else. Each backend's own entitlement and tool policy still apply on top.</p></div>
+          <div class="setting-ctl"><select id="es-mode" aria-label="Who can use this gateway">
+            <option value="everyone" ${es.access.mode === "everyone" ? "selected" : ""}>Everyone with access</option>
+            <option value="groups" ${es.access.mode === "groups" ? "selected" : ""}>Only these access groups</option>
+            <option value="companies" ${es.access.mode === "companies" ? "selected" : ""}>Only these companies</option>
+          </select></div></div>
+        <div class="setting ${es.access.mode === "groups" ? "" : "hidden"}" id="es-groups-row"><div class="setting-text"><strong>Access groups</strong><p class="muted small">Comma separated${known.items.length ? `. In use: ${esc(known.items.join(", "))}` : ""}.</p></div>
+          <div class="setting-ctl"><input id="es-groups" class="ctl-wide" value="${esc(es.access.groups.join(", "))}" placeholder="finance, hr"></div></div>
+        <div class="setting ${es.access.mode === "companies" ? "" : "hidden"}" id="es-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids from the caller's token.</p></div>
+          <div class="setting-ctl"><input id="es-companies" class="ctl-wide" value="${esc(es.access.companies.join(", "))}" placeholder="1078836129"></div></div>
+        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Token lifetime, the public address and upstream credentials stay on the Security page; they are not per gateway.</p></div>
+          <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-head"><h2 class="section-title">How to connect</h2>${es.require_token ? chip("green", "Agent token required", "key") : chip("amber", "No token: every caller is the demo user", "warning")}</div>
       <div class="card" style="margin-bottom:12px">
-        <dl class="kv"><dt>Endpoint</dt><dd>${esc(ep.url)}</dd><dt>Transport</dt><dd>streamable HTTP</dd><dt>Auth</dt><dd>${SERVER.require_agent_token === false ? "none required (token requirement is off)" : "Authorization: Bearer &lt;agent token&gt;"}</dd><dt>Tool names</dt><dd>${ep.prefixed ? "prefixed by backend id" : "as the backend defines them"}</dd></dl>
+        <dl class="kv"><dt>Endpoint</dt><dd>${esc(ep.url)}</dd><dt>Transport</dt><dd>streamable HTTP</dd><dt>Auth</dt><dd>${es.require_token ? "Authorization: Bearer &lt;agent token&gt;" : "none required on this endpoint"}</dd><dt>Tool names</dt><dd>${ep.prefixed ? "prefixed by backend id" : "as the backend defines them"}</dd></dl>
         <p class="muted small" style="margin:0">Same endpoint for every client below. Open the one you use; <strong>Connect command</strong> at the top prints a ready-to-paste version with a token.</p>
       </div>
       <div class="guides">${Object.entries(guides).map(([k, v]) => `
@@ -1284,6 +1309,18 @@ pages.gateway = async () => {
       ${tools.length > 60 ? `<p class="muted small" style="margin-top:8px">${tools.length - 60} more.</p>` : ""}
     </div>`;
 
+  $("#es-mode").onchange = (e) => {
+    $("#es-groups-row").classList.toggle("hidden", e.target.value !== "groups");
+    $("#es-companies-row").classList.toggle("hidden", e.target.value !== "companies");
+  };
+  $("#es-save").onclick = async () => {
+    try {
+      const v = $("#es-require").value;
+      const r = await api("PUT", `/api/endpoints/${settingsKey}/settings`, { require_token: v === "inherit" ? null : v === "true",
+        access: { mode: $("#es-mode").value, groups: $("#es-groups").value, companies: $("#es-companies").value } });
+      toast("Gateway settings saved", `${r.require_token ? "Token required" : "No token required"}; applies on the next request`); pages.gateway();
+    } catch (err) { toast("Save failed", err.message, 4500); }
+  };
   $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     const act = b.dataset.act;
     try {
@@ -1336,8 +1373,8 @@ pages.security = async () => {
       <div class="card settings-list">
         ${setting("require_upstream_bearer", "Bizplay API endpoints require a bearer token",
           "Records the policy that every /api/* call carries the service token. Enforced by the provider's own API, not here.", toggle("require_upstream_bearer"))}
-        ${setting("require_gateway_bearer", "MCP gateway requires an agent token",
-          "Agents must present a portal-issued token over HTTP. Read by the gateways at startup, so restart them after changing it. Off means anyone who reaches the gateway is the same demo user.", toggle("require_gateway_bearer"))}
+        ${setting("require_gateway_bearer", "Gateways require an agent token by default",
+          "The default for every gateway endpoint; each gateway can override it on its own page. Applies on the next request. Off means anyone who reaches an endpoint is the same demo user.", toggle("require_gateway_bearer"))}
         ${setting("confirm_on_write", "Write tools ask for confirmation",
           "Turning this on sets confirm-before-call on every write tool of every backend at once.", toggle("confirm_on_write"))}
         ${setting("token_ttl_days", "Default agent token lifetime",

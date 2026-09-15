@@ -46,7 +46,7 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import ToolAnnotations
 
 from . import audit, oauth, policy_store, specs
-from .auth import current_principal, gateway_auth
+from .auth import claims_for, current_principal, touch_token
 
 TransportFactory = Callable[[dict], httpx2.AsyncBaseTransport | None]
 # (provider record, headers for this call) -> fastmcp Client to the backend
@@ -338,7 +338,9 @@ def build_registry_gateway(transport_factory: TransportFactory | None = None,
             "endpoint tool names are prefixed with the provider id. Results are limited to the "
             "caller's own company."
         ),
-        auth=gateway_auth(),
+        # Authentication is enforced per endpoint by RegistryASGI (token requirement and
+        # entitlement can differ per gateway and change without a restart).
+        auth=None,
     )
     registry = ProviderRegistry(gateway, transport_factory, mcp_client_factory)
     registry.sync(force=True)
@@ -362,12 +364,21 @@ class RegistryASGI:
     def lifespan(self):
         return self.inner.lifespan
 
+    @staticmethod
+    async def _reply(send, status: int, body: dict, extra_headers=()) -> None:
+        raw = json.dumps(body).encode()
+        headers = [(b"content-type", b"application/json"), (b"content-length", str(len(raw)).encode()), *extra_headers]
+        await send({"type": "http.response.start", "status": status, "headers": headers})
+        await send({"type": "http.response.body", "body": raw})
+
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "http":
             path = scope["path"]
+            state = policy_store.load()
+            headers = dict(scope.get("headers") or {})
+            key, extra = "", {}
             if path.startswith("/mcp/") and path.strip("/") != "mcp":
                 key = path[len("/mcp/"):].strip("/")
-                state = policy_store.load()
                 p = state["providers"].get(key)
                 g = state["gateways"].get(key)
                 if p and p.get("status") == "published" and p.get("standalone"):
@@ -389,6 +400,24 @@ class RegistryASGI:
                                 "headers": [(b"content-type", ctype), (b"content-length", str(len(body)).encode())]})
                     await send({"type": "http.response.body", "body": body})
                     return
+            if path == "/mcp" or key:
+                # Who is calling: a portal-issued agent token, if one is presented.
+                auth_header = headers.get(b"authorization", b"").decode(errors="ignore")
+                scheme, _, token = auth_header.partition(" ")
+                record = policy_store.find_agent_token(state, token.strip()) if scheme.lower() == "bearer" and token.strip() else None
+                policy = policy_store.endpoint_policy(state, key)
+                challenge = (b"www-authenticate", f'Bearer realm="bizplay-gateway", resource="{path}"'.encode())
+                if auth_header and record is None:
+                    return await self._reply(send, 401, {"error": "invalid or expired agent token"}, [challenge])
+                if policy["require_token"] and record is None:
+                    return await self._reply(send, 401, {"error": "this gateway requires an agent token; issue one in the Bizplay MCP portal"}, [challenge])
+                claims = claims_for(record) if record else None
+                ok, reason = policy_store.check_endpoint_access(policy, claims)
+                if not ok:
+                    return await self._reply(send, 403, {"error": reason})
+                if record:
+                    touch_token(state, record)
+                    extra = {**extra, "principal": claims}
                 scope = {**scope, "path": "/mcp", "raw_path": b"/mcp", "state": {**(scope.get("state") or {}), **extra}}
         await self.inner(scope, receive, send)
 

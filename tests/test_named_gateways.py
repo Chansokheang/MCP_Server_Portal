@@ -90,3 +90,30 @@ async def test_gateway_validation(admin, services):
     ok = await admin.post("/api/gateways", json={"name": "All of it", "providers": ",".join(services)})
     assert ok.status_code == 201 and len(ok.json()["backends"]) == 3
     assert (await admin.post("/api/gateways", json={"name": "All of it", "providers": services})).status_code == 409
+
+
+async def test_token_requirement_and_entitlement_are_per_endpoint(admin, services, served, monkeypatch):
+    """The shared endpoint can stay open while a named gateway demands a token and a group."""
+    monkeypatch.delenv("BIZPLAY_REQUIRE_AGENT_TOKEN", raising=False)
+    # The portal's default applies live (no restart): open by default here, finance overrides to required.
+    assert (await admin.put("/api/security", json={"require_gateway_bearer": False})).status_code == 200
+    alpha, beta, gamma = services
+    await admin.post("/api/gateways", json={"name": "Finance", "providers": [alpha, beta]})
+    r = await admin.put("/api/endpoints/finance/settings", json={"require_token": True, "access": {"mode": "groups", "groups": "finance"}})
+    assert r.status_code == 200 and r.json()["require_token"] is True and not r.json()["inherits"]
+    finance_tok = (await admin.post("/api/tokens", json={"label": "f", "user_id": "emp001", "role": "employee", "groups": "finance"})).json()["token"]
+    hr_tok = (await admin.post("/api/tokens", json={"label": "h", "user_id": "emp002", "role": "employee", "groups": "hr"})).json()["token"]
+
+    async with httpx.AsyncClient() as http:
+        assert (await http.post(f"{served}/mcp/finance", json={})).status_code == 401, "no token: refused"
+        assert "www-authenticate" in (await http.post(f"{served}/mcp/finance", json={})).headers
+        assert (await http.post(f"{served}/mcp/finance", json={}, headers={"Authorization": "Bearer bogus"})).status_code == 401
+        assert (await http.post(f"{served}/mcp/finance", json={}, headers={"Authorization": f"Bearer {hr_tok}"})).status_code == 403, "wrong group"
+    assert await names(f"{served}/mcp") == {"alpha_ping", "beta_ping", "gamma_ping"}, "the shared endpoint is untouched (inherits: not required)"
+    async with Client(StreamableHttpTransport(f"{served}/mcp/finance", auth=finance_tok)) as c:
+        assert {t.name for t in await c.list_tools() if t.name.endswith("_ping")} == {"alpha_ping", "beta_ping"}
+
+    # Back to inheriting the (open) default: no token needed again, live.
+    await admin.put("/api/endpoints/finance/settings", json={"require_token": None, "access": {"mode": "everyone"}})
+    assert await names(f"{served}/mcp/finance") == {"alpha_ping", "beta_ping"}
+    assert (await admin.get("/api/endpoints/nope/settings")).status_code == 404

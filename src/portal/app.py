@@ -154,7 +154,8 @@ def _security_checklist(state: dict) -> list[dict]:
          "detail": ("Accepted risk, demo data only: " + ", ".join(open_published)) if open_published
          else "Every published API is protected by a token or network isolation."},
         {"id": "gateway_bearer", "label": "MCP gateway requires a bearer token",
-         "ok": sec["require_gateway_bearer"], "detail": "Agents must present a portal-issued token over HTTP."},
+         "ok": sec["require_gateway_bearer"] and not any((s or {}).get("require_token") is False for s in state.get("endpoint_settings", {}).values()),
+         "detail": "The default for every gateway endpoint; an endpoint may override it on its own page."},
         {"id": "confirm_write", "label": "Write tools require user confirmation",
          "ok": not write_unconfirmed, "detail": "Unconfirmed: " + ", ".join(write_unconfirmed) if write_unconfirmed else "All enabled write tools ask before acting."},
         {"id": "token_ttl", "label": "No agent token lives longer than 90 days",
@@ -824,6 +825,41 @@ async def delete_gateway(request: Request):
     return JSONResponse({"ok": True})
 
 
+# --- per-endpoint settings: token requirement and who may use the endpoint ---------
+def _endpoint_key(request: Request) -> str:
+    key = request.path_params["key"]
+    return "" if key == "_shared" else key
+
+
+def _endpoint_public(state: dict, key: str) -> dict:
+    own = state["endpoint_settings"].get(key) or {}
+    return {"key": key or "_shared", "require_token": own.get("require_token"), **policy_store.endpoint_policy(state, key)}
+
+
+async def get_endpoint_settings(request: Request):
+    state = policy_store.load()
+    key = _endpoint_key(request)
+    if key and key not in state["gateways"] and not (state["providers"].get(key) or {}).get("standalone"):
+        raise ApiError(404, "no such endpoint")
+    return JSONResponse(_endpoint_public(state, key))
+
+
+async def put_endpoint_settings(request: Request):
+    body = await request.json()
+    state = policy_store.load()
+    key = _endpoint_key(request)
+    if key and key not in state["gateways"] and not (state["providers"].get(key) or {}).get("standalone"):
+        raise ApiError(404, "no such endpoint")
+    own = dict(state["endpoint_settings"].get(key) or {})
+    if "require_token" in body:
+        own["require_token"] = None if body["require_token"] in (None, "", "inherit") else bool(body["require_token"])
+    if "access" in body and isinstance(body["access"], dict):
+        own["access"] = _access_config(body["access"])
+    state["endpoint_settings"][key] = own
+    policy_store.save(state)
+    return JSONResponse(_endpoint_public(state, key))
+
+
 # --- tools / access control -----------------------------------------------------
 async def list_tools(request: Request):
     state = policy_store.load()
@@ -1043,6 +1079,8 @@ app = Starlette(
         Route("/api/registry/{pid}/{action}", set_provider_status, methods=["POST"]),
         Route("/oauth/callback", oauth_callback),
         Route("/api/groups", list_groups),
+        Route("/api/endpoints/{key}/settings", get_endpoint_settings),
+        Route("/api/endpoints/{key}/settings", put_endpoint_settings, methods=["PUT"]),
         Route("/api/gateways", list_gateways),
         Route("/api/gateways", create_gateway, methods=["POST"]),
         Route("/api/gateways/{gid}", update_gateway, methods=["PATCH"]),

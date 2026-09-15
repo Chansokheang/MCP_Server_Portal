@@ -52,8 +52,7 @@ class PortalTokenVerifier(TokenVerifier):
         record = policy_store.find_agent_token(state, token)
         if record is None:
             return None
-        record["last_used_at"] = time.time()
-        policy_store.save(state)
+        touch_token(state, record)
         return AccessToken(
             token=token,
             client_id=record["agent"],
@@ -66,6 +65,19 @@ class PortalTokenVerifier(TokenVerifier):
         )
 
 
+def touch_token(state: dict, record: dict) -> None:
+    """Record use, at most once a minute, so a busy agent does not rewrite the state file per call."""
+    now = time.time()
+    if not record.get("last_used_at") or now - record["last_used_at"] > 60:
+        record["last_used_at"] = now
+        policy_store.save(state)
+
+
+def claims_for(record: dict) -> dict:
+    return {"sub": record["sub"], "role": record["role"], "company": record["company"],
+            "groups": list(record.get("groups") or []), "token_id": record["id"], "agent": record["agent"]}
+
+
 class Principal:
     """Who is calling, and how we know."""
 
@@ -76,6 +88,15 @@ class Principal:
 
 
 def current_principal() -> Principal:
+    # The registry gateway verifies the agent token itself, per endpoint, and leaves the
+    # claims in the request state; the curated server still uses FastMCP's verifier.
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        claims = (get_http_request().scope.get("state") or {}).get("principal")
+        if claims:
+            return Principal(claims["sub"], "bearer", claims)
+    except RuntimeError:
+        pass
     token = get_access_token()
     if token is not None and token.subject:
         return Principal(token.subject, "bearer", token.claims)

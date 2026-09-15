@@ -76,6 +76,9 @@ def _seed_state() -> dict:
         "oauth_pending": {},
         # Named gateways: a chosen set of backends served on /mcp/<id>, prefixed like /mcp.
         "gateways": {},
+        # Per-endpoint settings, keyed "" (shared /mcp), a gateway id, or a deployed backend id:
+        # {"require_token": None | bool (None inherits security.require_gateway_bearer), "access": {...}}
+        "endpoint_settings": {},
         "security": {
             # The address agents use, when it differs from what this server
             # listens on (a tunnel, or nginx with a certificate in front).
@@ -160,6 +163,7 @@ def load() -> dict:
         state.setdefault("user_connections", {})
         state.setdefault("oauth_pending", {})
         state.setdefault("gateways", {})
+        state.setdefault("endpoint_settings", {})
         return state
 
 
@@ -285,6 +289,39 @@ def published_registry_providers(state: dict) -> list[dict]:
     """Published providers the registry gateway serves: OpenAPI-backed or proxied MCP servers."""
     return [p for p in state["providers"].values()
             if p.get("status") == "published" and (p.get("spec") or p.get("kind") == "mcp")]
+
+
+def endpoint_policy(state: dict, key: str) -> dict:
+    """Effective settings for one endpoint: token requirement (inheriting the global default) and entitlement."""
+    own = state.get("endpoint_settings", {}).get(key) or {}
+    default = os.environ.get("BIZPLAY_REQUIRE_AGENT_TOKEN")
+    if default is not None:
+        default_required = default.strip().lower() not in ("0", "false", "no", "off")
+    else:
+        default_required = bool(state["security"].get("require_gateway_bearer", True))
+    required = own.get("require_token")
+    return {
+        "require_token": default_required if required is None else bool(required),
+        "inherits": required is None,
+        "default_require_token": default_required,
+        "access": own.get("access") or {"mode": "everyone", "groups": [], "companies": []},
+    }
+
+
+def check_endpoint_access(policy: dict, claims: dict | None) -> tuple[bool, str]:
+    """May this caller use the endpoint at all? Same rule shape as a backend's entitlement."""
+    access = policy["access"]
+    mode = access.get("mode", "everyone")
+    claims = claims or {}
+    if mode == "groups":
+        wanted = set(access.get("groups") or [])
+        if not wanted & set(claims.get("groups") or []):
+            return False, f"this gateway is limited to access group(s) {', '.join(sorted(wanted)) or '(none)'}"
+    elif mode == "companies":
+        wanted = [str(c) for c in access.get("companies") or []]
+        if str(claims.get("company") or "") not in wanted:
+            return False, f"this gateway is limited to company(ies) {', '.join(wanted) or '(none)'}"
+    return True, ""
 
 
 def gateway_url(state: dict, gateway: dict) -> str:
