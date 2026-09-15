@@ -867,6 +867,12 @@ async def update_security(request: Request):
         if url and not url.startswith("http"):
             raise ApiError(400, "public_mcp_url must start with http")
         sec["public_mcp_url"] = url
+        # A backend does not own an endpoint: every registered one follows the public address,
+        # so its standalone URL and setup instructions move with it.
+        base = url or _origin(request) + "/mcp"
+        for p in state["providers"].values():
+            if p.get("spec") or p.get("kind") == "mcp":
+                p["mcp_url"] = base
     if body.get("confirm_on_write"):
         for p in state["providers"].values():
             for t in p["tools"].values():

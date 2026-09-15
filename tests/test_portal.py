@@ -232,3 +232,14 @@ async def test_overview_and_audit(admin):
     ov = (await admin.get("/api/overview")).json()
     assert ov["providers"] >= 1 and 0 <= ov["score"] <= 100
     assert (await admin.get("/api/audit?limit=5")).status_code == 200
+
+
+async def test_backends_follow_the_public_endpoint(admin):
+    """A backend does not own an address: changing the public endpoint moves every registered backend with it."""
+    pid = (await admin.post("/api/registry", json={"name": "Follower", "base_url": "http://f.test", "spec": SPEC, "auth_mode": "open"})).json()["id"]
+    await admin.put("/api/security", json={"public_mcp_url": "https://mcp.example.com/mcp"})
+    p = next(x for x in (await admin.get("/api/registry")).json()["items"] if x["id"] == pid)
+    assert p["mcp_url"] == "https://mcp.example.com/mcp" and p["standalone_url"] == f"https://mcp.example.com/mcp/{pid}"
+    await admin.put("/api/security", json={"public_mcp_url": ""})
+    p = next(x for x in (await admin.get("/api/registry")).json()["items"] if x["id"] == pid)
+    assert p["mcp_url"] == "http://portal.test/mcp", "blank means the portal's own address"

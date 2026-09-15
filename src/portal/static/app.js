@@ -286,13 +286,13 @@ pages.registry = async () => {
       <span class="muted small">${items.length} backend(s). Type in the search box above to filter by name, URL or owner.</span>
     </div>
     <div class="table-card"><div class="table-wrap"><table id="registry-table">
-      <tr><th>Backend</th><th>Type and auth</th><th>Status</th><th>Tools</th><th>Endpoint</th><th></th></tr>
+      <tr><th>Backend</th><th>Type and auth</th><th>Status</th><th>Tools</th><th>Served on</th><th></th></tr>
       ${items.length ? items.map((p, i) => `<tr class="row-link" data-kind="${esc(p.kind)}" data-auth="${esc(p.auth_mode)}" data-open="${esc(p.id)}" title="Registered ${esc(fmtDate(p.created_at))} by ${esc(p.owner)}">
         <td><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub mono">${esc(p.base_url.replace(/^https?:\/\//, ""))}</div></span></span></td>
         <td><div class="chips">${kindChip(p.kind)}${authChip(p.auth_mode)}</div></td>
         <td><div class="chips">${statusChip(p.status)}${standaloneChip(p)}</div></td>
         <td><span class="mono">${p.tools_enabled} / ${p.tool_count}</span></td>
-        <td class="mono small url">${esc(p.standalone ? p.standalone_url : p.mcp_url)}${p.tool_prefix && !p.standalone ? `<div class="sub">tools ${esc(p.tool_prefix)}*</div>` : p.standalone ? `<div class="sub">own server, plain tool names</div>` : ""}</td>
+        <td class="small">${p.status === "published" ? `<div>shared gateway${p.tool_prefix ? ` <span class="mono">${esc(p.tool_prefix)}*</span>` : ""}</div>` : `<div class="muted">not published</div>`}${p.standalone ? `<div class="sub mono">${esc(p.standalone_url)}</div>` : ""}</td>
         <td class="actions">
           ${p.has_spec || p.kind === "mcp" ? `<button class="btn small ${p.standalone ? "" : "link"}" data-act="${p.standalone ? "undeploy" : "deploy"}" data-id="${esc(p.id)}" title="${p.standalone ? "Stop serving " + esc(p.standalone_url) : "Serve this backend alone at " + esc(p.standalone_url)}"><i class="ph ${p.standalone ? "ph-rocket" : "ph-rocket-launch"}"></i> ${p.standalone ? "Undeploy" : "Deploy"}</button>` : `<button class="btn small link" data-act="usage" data-id="${esc(p.id)}"><i class="ph ph-robot"></i> Setup</button>`}
         </td>
@@ -491,8 +491,6 @@ async function registerDialog(opts = {}) {
       </div>
       <label class="field">Provider name <input name="name" placeholder="e.g. Bizplay HR API" required></label>
       <label class="field"><span id="reg-base-label">Base URL of the existing API</span> <input name="base_url" id="reg-base" placeholder="https://api.example.com" required></label>
-      <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(SERVER.public_mcp_url || (location.origin + "/mcp"))}" placeholder="https://your-host/mcp">
-        <span class="muted small">Any address that reaches this gateway. Use an HTTPS one for claude.ai and ChatGPT.</span></label>
       <label class="field"><span id="reg-mode-label">How is the API protected?</span>
         <select name="auth_mode" id="reg-mode">
           <option value="bearer">Bearer token: it rejects anonymous calls (recommended)</option>
@@ -620,8 +618,6 @@ async function editDialog(p) {
       <label class="field">Provider name <input name="name" value="${esc(p.name)}"></label>
       <label class="field">${p.kind === "mcp" ? "URL of the MCP server" : "Base URL of the existing API"} <input name="base_url" value="${esc(p.base_url)}">
         <span class="muted small">${p.kind === "mcp" ? "Saving reconnects and refreshes the tool list; your enable, role and confirm settings are kept." : "Host only. The paths come from the spec, so a base URL ending in a path the spec also has causes 404."}</span></label>
-      <label class="field">MCP endpoint agents will use <input name="mcp_url" value="${esc(p.mcp_url)}">
-        <span class="muted small">Use the address reachable from outside this server, not 127.0.0.1. A deployed server lives at this address plus /${esc(p.id)}.</span></label>
       <label class="field">How is the ${p.kind === "mcp" ? "MCP server" : "API"} protected?
         <select name="auth_mode" id="ed-mode">
           ${opt("bearer", "Bearer token: the API rejects anonymous calls")}
