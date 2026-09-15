@@ -89,6 +89,19 @@ services:
       portal:
         condition: service_started
 
+  # COOCON mock: a second demo backend (project-based scraping of bank, card,
+  # Hometax and insurance data). Register it in the portal as a REST API with
+  # base URL http://coocon:18096 and the spec from http://coocon:18096/openapi.json.
+  coocon:
+    <<: *app
+    command: ["coocon-mock", "--host", "0.0.0.0", "--port", "18096"]
+    environment:
+      <<: *public-env
+      # Set to require a bearer token on /api/* (to demo the gateway's bearer mode).
+      COOCON_API_TOKEN: ${COOCON_API_TOKEN:-}
+    ports:
+      - "${COOCON_PORT:-9016}:18096"
+
   # Optional: an HTTPS address for clients that refuse plain HTTP, such as
   # claude.ai and ChatGPT. Not started by default.
   #

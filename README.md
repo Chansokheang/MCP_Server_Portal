@@ -152,6 +152,24 @@ register `http://127.0.0.1:18095` with the spec at `/openapi.json` in OAuth
 mode, Discover, publish, Connect account, then call `items_api_listMyItems`
 through the gateway and see the signed-in user's items.
 
+### A second demo backend: COOCON
+
+`coocon-mock` is a project-based data-scraping API in the style of a
+financial data aggregator: a company owns projects, a project scrapes sources
+(bank accounts, corporate cards, Hometax tax invoices, the four insurances)
+through jobs, and a finished job yields records. It ships in the image as the
+`coocon` compose service and runs locally with
+`uv run coocon-mock --port 18096`.
+
+Register it as a REST API with base URL `http://127.0.0.1:18096` (or
+`http://coocon:18096` inside compose), spec at `/openapi.json`, auth mode
+open, then publish. Reads (`listProjects`, `getJobRecords`, ...) are enabled
+at once; `startJob` and `createProject` are writes, so enable them on the
+backend page first. Set `COOCON_API_TOKEN` to make the API demand a bearer
+token and register it in bearer mode instead. A useful multi-step prompt:
+"For company 1078836129, scrape Hometax for the first half of September and
+total the VAT."
+
 ### Bearer tokens everywhere
 
 Three separate bearer tokens, none of them visible to the AI model:
@@ -378,6 +396,7 @@ docker compose up --build
 | registry-gateway | 9011 | 8002 | Serves every published API; new ones appear without a restart |
 | portal | 9012 | 18090 | UI and API, plus the same registry gateway at `/mcp` and `/mcp/<id>` on its own origin |
 | legacy-api | 9013 | 18080 | Mock of the existing Bizplay API; drop the mapping in production |
+| coocon | 9016 | 18096 | COOCON mock, a second demo backend (project-based scraping); register it as `http://coocon:18096` |
 
 ### Changing ports
 
