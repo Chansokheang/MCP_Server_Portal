@@ -417,3 +417,13 @@ tbody tr td { transition: background .12s ease; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .anim, .modal, .modal-card, .toast, .login-card { opacity: 1 !important; transform: none !important; }
 }
+
+/* ---- user directory ---- */
+.who-card { display: flex; align-items: center; gap: 14px; }
+.who-card .avatar { width: 44px; height: 44px; font-size: 16px; }
+.who-card .who-name { font-size: 16px; font-weight: 650; }
+.who-card .who-meta { color: var(--ink-3); font-size: 12.5px; }
+.pick-preview { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 26px; font-size: 12.5px; color: var(--ink-3); }
+.link-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.link-row:first-of-type { border-top: 0; }
+.link-row .sub { margin-top: 2px; }

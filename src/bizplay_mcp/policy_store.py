@@ -31,6 +31,29 @@ GATEWAY_TOOLS = [
 ]
 
 
+# DEMO ONLY: plain-text passwords, as for portal_users.
+DEMO_USERS = [
+    {"id": "emp001", "name": "Kim Minji", "email": "minji@bizplay.co.kr", "role": "employee", "company": "Bizplay Demo Co.",
+     "groups": ["finance"], "password": "minji1234", "created_at": "2026-09-11T09:00:00+00:00"},
+    {"id": "emp002", "name": "Lee Junho", "email": "junho@bizplay.co.kr", "role": "employee", "company": "Bizplay Demo Co.",
+     "groups": ["hr"], "password": "junho1234", "created_at": "2026-09-11T09:00:00+00:00"},
+    {"id": "mgr001", "name": "Park Seojin", "email": "seojin@bizplay.co.kr", "role": "manager", "company": "Bizplay Demo Co.",
+     "groups": ["finance"], "password": None, "created_at": "2026-09-11T09:00:00+00:00"},
+]
+
+USER_ROLES = ("employee", "manager")
+
+
+def public_user(u: dict) -> dict:
+    """A directory entry without its password, plus whether the person can sign in."""
+    return {**{k: v for k, v in u.items() if k != "password"}, "can_sign_in": bool(u.get("password"))}
+
+
+def user_by_email(state: dict, email: str) -> dict | None:
+    email = (email or "").strip().lower()
+    return next((u for u in state.get("users", {}).values() if (u.get("email") or "").lower() == email), None)
+
+
 def _seed_state() -> dict:
     return {
         "portal_users": {
@@ -39,6 +62,11 @@ def _seed_state() -> dict:
             "security@bizplay.co.kr": {"password": "sec1234", "name": "Security Reviewer", "role": "security"},
         },
         "sessions": {},
+        # The user directory: who agent tokens and linked accounts belong to. A token's
+        # role, company and groups come from here, so they are set once per person.
+        # Users with a password can sign in to the portal as members and serve themselves
+        # (their own tokens and account links); the rest are managed by an admin.
+        "users": {u["id"]: u for u in DEMO_USERS},
         "providers": {
             "bizplay": {
                 "id": "bizplay",
@@ -164,6 +192,7 @@ def load() -> dict:
         state.setdefault("oauth_pending", {})
         state.setdefault("gateways", {})
         state.setdefault("endpoint_settings", {})
+        state.setdefault("users", {u["id"]: dict(u) for u in DEMO_USERS})
         return state
 
 

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css">
   <!-- Bump the version when editing the assets so browsers do not serve a stale copy. -->
-  <link rel="stylesheet" href="/static/styles.css?v=39">
+  <link rel="stylesheet" href="/static/styles.css?v=40">
   <script>
     try { const t = localStorage.getItem("portal.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
   </script>
@@ -29,7 +29,7 @@
     <label class="field">Password <input name="password" type="password" value="admin1234" autocomplete="current-password" required></label>
     <button class="btn solid" type="submit"><i class="ph ph-arrow-right"></i> Sign in</button>
     <p id="login-error" class="error" role="alert"></p>
-    <p class="muted small">Demo accounts: admin@bizplay.co.kr / admin1234 and security@bizplay.co.kr / sec1234</p>
+    <p class="muted small">Admin: admin@bizplay.co.kr / admin1234 · Employees: minji@bizplay.co.kr / minji1234, junho@bizplay.co.kr / junho1234</p>
   </form>
 </section>
 
@@ -38,18 +38,23 @@
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark"><i class="ph-fill ph-plugs-connected"></i></span><span class="brand-name">bizplay</span></div>
     <div class="brand-sub">MCP Portal · DemoCorp01</div>
-    <div class="side-group">Gateway</div>
-    <nav class="side-nav" aria-label="Main">
+    <div class="side-group" data-member>Me</div>
+    <nav class="side-nav" aria-label="Me" data-member>
+      <a data-page="me"><i class="ph ph-user-circle"></i> My access</a>
+    </nav>
+    <div class="side-group" data-admin>Gateway</div>
+    <nav class="side-nav" aria-label="Main" data-admin>
       <a data-page="overview" class="active"><i class="ph ph-house"></i> Overview</a>
       <a data-page="registry"><i class="ph ph-plugs-connected"></i> MCP Registry</a>
     </nav>
-    <div class="side-group">Deployment</div>
-    <nav class="side-nav" aria-label="Deployment">
+    <div class="side-group" data-admin>Deployment</div>
+    <nav class="side-nav" aria-label="Deployment" data-admin>
       <a data-page="gateways"><i class="ph ph-squares-four"></i> MCP Gateways</a>
       <a data-page="servers"><i class="ph ph-rocket-launch"></i> MCP Servers</a>
     </nav>
-    <div class="side-group">Security</div>
-    <nav class="side-nav" aria-label="Security">
+    <div class="side-group" data-admin>Security</div>
+    <nav class="side-nav" aria-label="Security" data-admin>
+      <a data-page="users"><i class="ph ph-users"></i> Users</a>
       <a data-page="tokens"><i class="ph ph-key"></i> Agent Tokens</a>
       <a data-page="security"><i class="ph ph-shield-check"></i> Security</a>
       <a data-page="audit"><i class="ph ph-list-magnifying-glass"></i> Audit Log</a>
@@ -80,6 +85,6 @@
 <div id="modal" class="modal hidden" role="dialog" aria-modal="true"><div class="modal-card"><div id="modal-body"></div></div></div>
 <div id="toast" class="toast hidden" role="status"></div>
 
-<script src="/static/app.js?v=39"></script>
+<script src="/static/app.js?v=40"></script>
 </body>
 </html>

@@ -43,6 +43,9 @@ uv run bizplay-portal
 ```
 
 Open http://127.0.0.1:18090 and sign in with `admin@bizplay.co.kr` / `admin1234`.
+Two demo employees can sign in as members and serve themselves:
+`minji@bizplay.co.kr` / `minji1234` (emp001, finance) and
+`junho@bizplay.co.kr` / `junho1234` (emp002, hr).
 
 | Page | What it does |
 |---|---|
@@ -169,6 +172,22 @@ backend page first. Set `COOCON_API_TOKEN` to make the API demand a bearer
 token and register it in bearer mode instead. A useful multi-step prompt:
 "For company 1078836129, scrape Hometax for the first half of September and
 total the VAT."
+
+### Users: who tokens and linked accounts belong to
+
+The **Users** page is the directory. An agent token is issued *to a person
+picked from it* and takes their role, company and access groups from there,
+so those are set once per person and cannot disagree between tokens. The same
+picker is used when linking an account on an OAuth backend. "Someone not
+listed" in either dialog lets an admin type a new id (with role and groups),
+which adds the person to the directory at the same time.
+
+A user with a portal password signs in as a **member**: they see only
+**My access**, where they issue their own tokens, link their own accounts on
+backends that need a personal sign-in, and see the gateways they may use.
+Members cannot reach the admin pages, and the API refuses them anything but
+their own tokens and connections. Users without a password are managed by an
+admin. Removing a user revokes their tokens and drops their linked accounts.
 
 ### Bearer tokens everywhere
 

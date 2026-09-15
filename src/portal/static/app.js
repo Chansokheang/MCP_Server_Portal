@@ -164,13 +164,18 @@ function enterApp() {
   api("GET", "/api/config").then((c) => { SERVER = c; }).catch(() => {});
   $("#whoami-avatar").textContent = initials(session.user.name);
   $("#whoami-name").textContent = session.user.name;
-  $("#whoami-sub").textContent = `DemoCorp01 / ${session.user.role}`;
-  go(location.hash.replace("#", "") || "overview");
+  $("#whoami-sub").textContent = isAdmin() ? `DemoCorp01 / ${session.user.role}` : `${session.user.user_id} / ${session.user.user_role || "employee"}`;
+  document.querySelectorAll("[data-admin]").forEach((el) => el.classList.toggle("hidden", !isAdmin()));
+  document.querySelectorAll("[data-member]").forEach((el) => el.classList.toggle("hidden", isAdmin()));
+  go(location.hash.replace("#", "") || (isAdmin() ? "overview" : "me"));
 }
 
 // ---- router ----
 const pages = {};
-const titles = { overview: "Overview", registry: "MCP Registry", gateways: "MCP Gateways", gateway: "Gateway details", servers: "MCP Servers", provider: "Backend details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
+const titles = { overview: "Overview", registry: "MCP Registry", gateways: "MCP Gateways", gateway: "Gateway details", servers: "MCP Servers", provider: "Backend details", access: "Access Control", users: "Users", tokens: "Agent Tokens", security: "Security", audit: "Audit Log", me: "My access" };
+// What a member (an employee serving themselves) can open; anything else sends them home.
+const MEMBER_PAGES = new Set(["me", "gateway"]);
+const isAdmin = () => session?.user?.is_admin !== false;
 // Pages reached from another page keep that page's nav item lit.
 const RAIL_OF = { provider: "registry", access: "registry", gateway: "gateways" };
 function hashParam(name) { return new URLSearchParams(location.hash.split("?")[1] || "").get(name); }
@@ -189,6 +194,7 @@ function crumbs(...trail) {
 function pageActions(html) { $("#page-actions").innerHTML = html || ""; }
 function go(page) {
   page = (page || "").split("?")[0];
+  if (!isAdmin() && pages[page] && !MEMBER_PAGES.has(page)) { location.hash = "me"; page = "me"; }
   if (!pages[page]) {
     document.querySelectorAll(".side-nav a").forEach((a) => a.classList.remove("active"));
     $("#page-title").textContent = "Not found"; crumbs({ page: "overview", label: "Not found" }); pageActions(""); $("#tabs").classList.add("hidden");
@@ -881,7 +887,7 @@ pages.tokens = async () => {
       <tr><th>Token</th><th>Bizplay user</th><th>Company</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr>
       ${items.length ? items.map((t, i) => `<tr title="Issued by ${esc(t.created_by)}">
         <td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub"><span class="mono">${esc(t.hint)}</span> · ${esc(t.agent)}</div></span></span></td>
-        <td class="nowrap"><span class="mono">${esc(t.sub)}</span><div class="sub">${esc(t.role)}${(t.groups || []).length ? ` · ${esc(t.groups.join(", "))}` : ""}</div></td>
+        <td class="nowrap"><strong>${esc(t.user_name || t.sub)}</strong><div class="sub"><span class="mono">${esc(t.sub)}</span> · ${esc(t.role)}${(t.groups || []).length ? ` · ${esc(t.groups.join(", "))}` : ""}</div></td>
         <td class="small">${esc(t.company)}</td>
         <td>${stateChip[state(t)]}</td>
         <td class="small nowrap">${esc(fmtDate(t.expires_at))}</td>
@@ -897,36 +903,68 @@ pages.tokens = async () => {
   });
 };
 
-async function issueDialog() {
+/** A <select> of directory users, with a read-only preview of the picked one's role, company and groups. */
+const NEW_USER = "__new__";
+function userPicker(users, selected) {
+  const opt = (u) => `<option value="${esc(u.id)}" ${u.id === selected ? "selected" : ""}>${esc(u.name)} · ${esc(u.id)}</option>`;
+  return `<label class="field">User <select name="user_id" id="pick-user" required>${users.map(opt).join("")}<option value="${NEW_USER}">Someone not listed…</option></select>
+      <span class="muted small">Role, company and groups come from the <a href="#users">Users</a> page, so they cannot disagree with the token.</span></label>
+    <div class="pick-preview" id="pick-preview"></div>
+    <div id="pick-new" class="form-2 hidden">
+      <label class="field">Bizplay user id <input name="new_id" placeholder="emp003" pattern="[a-z0-9_-]+"><span class="muted small">Added to the Users page as well.</span></label>
+      <label class="field">Name <input name="new_name" placeholder="Choi Yuna"></label>
+      <label class="field">Role <select name="new_role"><option value="employee">employee</option><option value="manager">manager</option></select></label>
+      <label class="field">Access groups <input name="new_groups" placeholder="finance, hr (comma separated)"></label>
+    </div>`;
+}
+function bindUserPicker(users) {
+  const show = () => {
+    const v = $("#pick-user").value, u = users.find((x) => x.id === v);
+    $("#pick-new").classList.toggle("hidden", v !== NEW_USER);
+    $("#pick-new [name=new_id]").required = v === NEW_USER;
+    $("#pick-preview").innerHTML = u ? `${chip("", u.role, "identification-badge")}${chip("", u.company || "Bizplay Demo Co.", "buildings")}${(u.groups || []).length ? u.groups.map((g) => chip("lilac", g, "users-three")).join("") : chip("", "no groups", "users-three")}` : "";
+  };
+  $("#pick-user").onchange = show; show();
+}
+/** Form fields → API body: a typed-in person becomes user_id plus the fields that create them. */
+function pickedUser(f) {
+  if (f.user_id !== NEW_USER) return { user_id: f.user_id };
+  return { user_id: (f.new_id || "").trim().toLowerCase(), name: (f.new_name || "").trim(), role: f.new_role || "employee", groups: f.new_groups || "" };
+}
+
+/** Where a fresh token is used: the public address if set, else this portal's own /mcp. */
+const agentUrl = () => SERVER.public_mcp_url || SERVER.default_mcp_url || SERVER.portal_mcp_url || `${location.origin}/mcp`;
+
+async function issueDialog(after) {
+  const me = session.user;
+  const users = isAdmin() ? (await api("GET", "/api/users")).items : [{ id: me.user_id, name: me.name, role: me.user_role, company: me.company, groups: me.groups || [] }];
+  if (!users.length) { toast("No users yet", "Add the person on the Users page first", 4500); return; }
   modal(`<h2><i class="ph ph-key"></i> Issue an agent token</h2>
     <form id="tok-form" class="form">
-      <label class="field">Label <input name="label" placeholder="Minji's Claude Desktop" required></label>
+      <label class="field">Label <input name="label" placeholder="${esc(users[0].name.split(" ")[0])}'s Claude Desktop" required></label>
+      ${isAdmin() ? userPicker(users, me.user_id || users[0].id) : `<div class="who-card"><span class="avatar">${esc(initials(me.name))}</span><div><div class="who-name">${esc(me.name)}</div><div class="who-meta"><span class="mono">${esc(me.user_id)}</span> · ${esc(me.user_role || "employee")}${(me.groups || []).length ? ` · ${esc(me.groups.join(", "))}` : ""}</div></div></div>`}
       <div class="form-2">
-        <label class="field">Bizplay user id <input name="user_id" value="emp001" required></label>
-        <label class="field">Role <select name="role"><option value="employee">employee</option><option value="manager">manager</option></select></label>
-        <label class="field">Company <input name="company" value="Bizplay Demo Co."></label>
-        <label class="field">Access groups <input name="groups" placeholder="finance, hr (comma separated)"><span class="muted small">Backends limited to groups are visible only to tokens that carry one of them.</span></label>
-        <label class="field">AI agent <select name="agent"><option>Claude Desktop</option><option>Claude.ai</option><option>Microsoft Copilot Studio</option><option>Salesforce Agentforce</option></select></label>
+        <label class="field">AI agent <select name="agent"><option>Claude Desktop</option><option>Claude.ai</option><option>ChatGPT</option><option>Microsoft Copilot Studio</option><option>Salesforce Agentforce</option></select></label>
         <label class="field">Expires in (days) <input name="ttl_days" type="number" value="30" min="1" max="365"></label>
       </div>
-      <p class="muted small">The gateway rejects the token if its role differs from the provider's record for this user. Demo users: emp001 and emp002 (employee), mgr001 (manager).</p>
       <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="tok-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Issue</button></div>
       <p class="error" id="tok-error"></p></form>`);
+  if (isAdmin()) bindUserPicker(users);
   $("#tok-cancel").onclick = closeModal;
   $("#tok-form").onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
     try {
-      const r = await api("POST", "/api/tokens", f);
+      const r = await api("POST", "/api/tokens", { label: f.label, agent: f.agent, ttl_days: f.ttl_days, ...(isAdmin() ? pickedUser(f) : {}) });
       modal(`<h2><i class="ph ph-check-circle"></i> Token issued</h2><p>Copy it now. It will not be shown again.</p>
         <div class="token-box"><code id="tok-value">${esc(r.token)}</code><button class="btn small" id="tok-copy"><i class="ph ph-copy"></i> Copy</button></div>
         <h2 class="section-title" style="margin-top:16px">Use it from any MCP client</h2>
-        <pre>URL:    http://127.0.0.1:8000/mcp
+        <pre>URL:    ${esc(agentUrl())}
 Header: Authorization: Bearer ${esc(r.token)}</pre>
-        <p class="muted small" style="margin-top:8px">Bound to ${esc(r.record.sub)} (${esc(r.record.role)}), expires ${esc(fmtTs(r.record.expires_at))}.</p>
+        <p class="muted small" style="margin-top:8px">Bound to ${esc(r.record.user_name || r.record.sub)} (<span class="mono">${esc(r.record.sub)}</span>, ${esc(r.record.role)}), expires ${esc(fmtTs(r.record.expires_at))}.</p>
         <div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px"><button class="btn" id="tok-connect"><i class="ph ph-robot"></i> Setup instructions</button><button class="btn solid" id="tok-done">Done</button></div>`);
       $("#tok-connect").onclick = () => { closeModal(); setHash("gateway", { g: "" }); };
       $("#tok-copy").onclick = () => navigator.clipboard?.writeText(r.token).then(() => toast("Copied", "Token is on your clipboard"));
-      $("#tok-done").onclick = () => { closeModal(); pages.tokens(); };
+      $("#tok-done").onclick = () => { closeModal(); (after || pages.tokens)(); };
     } catch (err) { $("#tok-error").textContent = err.message; }
   };
 }
@@ -1062,26 +1100,30 @@ function clientGuides(p, tools, via) {
 }
 
 /** Link one user's account on an OAuth backend: the auth server opens in a new tab and sends the user back here. */
-async function connectDialog(p) {
+async function connectDialog(p, after) {
+  const me = session.user;
+  const users = isAdmin() ? (await api("GET", "/api/users")).items : [];
   modal(`<h2><i class="ph ph-user-circle-plus"></i> Connect an account on ${esc(p.name)}</h2>
-    <p class="muted">The user signs in at ${esc(hostOf(p.oauth?.authorization_url) || "the backend's auth server")} in a new tab. Their tokens are kept by the gateway and used only for their own calls.</p>
+    <p class="muted">${isAdmin() ? "The user" : "You"} sign${isAdmin() ? "s" : ""} in at ${esc(hostOf(p.oauth?.authorization_url) || "the backend's auth server")} in a new tab. The tokens are kept by the gateway and used only for ${isAdmin() ? "that user's" : "your"} own calls.</p>
     <form id="cn-form" class="form">
-      <label class="field">Bizplay user id this account belongs to <input name="user_id" value="emp001" required>
-        <span class="muted small">The identity agents call with: the user id on the agent token, or BIZPLAY_USER_ID when tokens are off.</span></label>
+      ${isAdmin() ? userPicker(users, me.user_id || users[0]?.id) : `<div class="who-card"><span class="avatar">${esc(initials(me.name))}</span><div><div class="who-name">${esc(me.name)}</div><div class="who-meta">Linking as <span class="mono">${esc(me.user_id)}</span>, the identity your agent tokens carry.</div></div></div>`}
       <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="cn-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-arrow-square-out"></i> Open sign-in</button></div>
       <p class="error" id="cn-error"></p>
     </form>`);
+  if (isAdmin()) bindUserPicker(users);
   $("#cn-cancel").onclick = closeModal;
   $("#cn-form").onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    const body = isAdmin() ? pickedUser(f) : {};
+    const who = isAdmin() ? (users.find((u) => u.id === body.user_id)?.name || body.name || body.user_id) : me.name;
     try {
-      const r = await api("POST", `/api/registry/${p.id}/oauth/start`, f);
+      const r = await api("POST", `/api/registry/${p.id}/oauth/start`, body);
       const win = window.open(r.authorization_url, "_blank");
-      modal(`<h2><i class="ph ph-hourglass"></i> Waiting for ${esc(f.user_id)} to sign in</h2>
+      modal(`<h2><i class="ph ph-hourglass"></i> Waiting for ${esc(who)} to sign in</h2>
         <p class="muted">A sign-in tab was opened. When it finishes, it returns to this portal and the account appears under Connected accounts.</p>
         ${win ? "" : `<p class="error">The browser blocked the pop-up. Open this address instead:</p>${codeBlock("cn-url", r.authorization_url)}`}
         <div style="display:flex;justify-content:flex-end"><button class="btn" id="cn-done">Close</button></div>`);
-      $("#cn-done").onclick = () => { closeModal(); pages.provider(); };
+      $("#cn-done").onclick = () => { closeModal(); (after || pages.provider)(); };
     } catch (err) { $("#cn-error").textContent = err.message; }
   };
 }
@@ -1102,7 +1144,7 @@ function connectionsCard(p, conns) {
       </div>
       <p class="card-desc" style="-webkit-line-clamp:4">This backend wants each user's own token from its auth server. The AI client never sees that server: a user links their account here once, the gateway keeps the refresh token and attaches the right access token to that user's calls. A caller without a linked account gets a message telling them to connect it.</p>
       ${conns.length ? `<div class="table-wrap"><table><tr><th>User</th><th>Linked</th><th>Token expires</th><th>Scope</th><th></th></tr>
-        ${conns.map((c) => `<tr><td class="mono">${esc(c.user_id)}</td><td class="small">${esc(fmtTs(c.connected_at))}</td><td class="small">${c.expires_at ? esc(fmtTs(c.expires_at)) + (c.can_refresh ? " (auto-refresh)" : "") : "never"}</td><td class="small mono">${esc(c.scope || "")}</td><td><button class="btn small danger" data-disconnect="${esc(c.user_id)}"><i class="ph ph-link-break"></i> Disconnect</button></td></tr>`).join("")}
+        ${conns.map((c) => `<tr><td class="nowrap"><strong>${esc(c.user_name || c.user_id)}</strong><div class="sub mono">${esc(c.user_id)}</div></td><td class="small">${esc(fmtTs(c.connected_at))}</td><td class="small">${c.expires_at ? esc(fmtTs(c.expires_at)) + (c.can_refresh ? " (auto-refresh)" : "") : "never"}</td><td class="small mono">${esc(c.scope || "")}</td><td><button class="btn small danger" data-disconnect="${esc(c.user_id)}"><i class="ph ph-link-break"></i> Disconnect</button></td></tr>`).join("")}
         </table></div>` : `<p class="muted small">No accounts linked yet.</p>`}
       <div class="card-actions">
         <button class="btn small solid" data-act="connect" ${p.oauth_ready ? "" : "disabled"}><i class="ph ph-user-circle-plus"></i> Connect account</button>
@@ -1114,6 +1156,7 @@ function connectionsCard(p, conns) {
 
 pages.provider = async () => {
   const pid = hashParam("p");
+  if (!isAdmin()) { const q = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")); delete q.p; setHash("me", q); return; }
   if (hashParam("connected")) { toast("Account linked", `${hashParam("connected")} can now use this backend${hashParam("tools") ? `; ${hashParam("tools")} tools loaded from the server` : ""}`, 6000); setHash("provider", { p: pid }); return; }
   if (hashParam("oauth_error")) { toast("Sign-in failed", hashParam("oauth_error"), 7000); setHash("provider", { p: pid }); return; }
   const [reg, gws, known] = await Promise.all([api("GET", "/api/registry"), api("GET", "/api/gateways"), api("GET", "/api/groups")]);
@@ -1265,7 +1308,7 @@ pages.gateway = async () => {
         ${ep.standalone ? `<button class="btn small danger" data-act="undeploy"><i class="ph ph-rocket"></i> Undeploy</button>` : ""}
       </div>` : ""}
     </div>
-    <div>
+    ${isAdmin() ? `<div>
       <div class="section-head"><h2 class="section-title">Gateway settings</h2>${es.access.mode === "everyone" ? chip("", "Open to every entitled caller", "users") : chip("lilac", `${es.access.mode}: ${(es.access[es.access.mode] || []).join(", ")}`, "users-three")}</div>
       <div class="card settings-list">
         <div class="setting"><div class="setting-text"><strong>Require an agent token</strong><p class="muted small">Callers must present a portal-issued token on this endpoint. Applies on the next request; no restart. Without a token every caller is the demo identity and no per-user rule can apply.</p></div>
@@ -1287,7 +1330,7 @@ pages.gateway = async () => {
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Token lifetime, the public address and upstream credentials stay on the Security page; they are not per gateway.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
       </div>
-    </div>
+    </div>` : ""}
     <div>
       <div class="section-head"><h2 class="section-title">How to connect</h2>${es.require_token ? chip("green", "Agent token required", "key") : chip("amber", "No token: every caller is the demo user", "warning")}</div>
       <div class="card" style="margin-bottom:12px">
@@ -1316,7 +1359,7 @@ pages.gateway = async () => {
     $("#es-groups-row").classList.toggle("hidden", e.target.value !== "groups");
     $("#es-companies-row").classList.toggle("hidden", e.target.value !== "companies");
   };
-  $("#es-save").onclick = async () => {
+  if ($("#es-save")) $("#es-save").onclick = async () => {
     try {
       const v = $("#es-require").value;
       const r = await api("PUT", `/api/endpoints/${settingsKey}/settings`, { require_token: v === "inherit" ? null : v === "true",
@@ -1423,6 +1466,120 @@ pages.security = async () => {
 };
 
 // ---- Audit ----
+
+// ---- Users: the directory tokens and linked accounts belong to ----
+pages.users = async () => {
+  const d = await api("GET", "/api/users");
+  const q = ($("#global-search").value || "").toLowerCase();
+  const items = d.items.filter((u) => !q || `${u.id} ${u.name} ${u.email} ${u.role} ${(u.groups || []).join(" ")}`.toLowerCase().includes(q));
+  pageActions(`<button class="btn solid" id="btn-add-user"><i class="ph ph-user-plus"></i> Add user</button>`);
+  $("#page").innerHTML = `
+    <div class="callout"><i class="ph ph-users"></i><span>Agent tokens and linked accounts are issued to people listed here. A token takes its role, company and groups from the person, so they are set once. Users with a portal password sign in as members and issue their own tokens and link their own accounts; the rest are managed here.</span></div>
+    <div class="table-card" style="margin-top:14px"><div class="table-wrap"><table>
+      <tr><th>User</th><th>Email</th><th>Role</th><th>Company</th><th>Groups</th><th>Portal sign-in</th><th>Tokens</th><th>Linked accounts</th><th></th></tr>
+      ${items.length ? items.map((u, i) => `<tr data-user="${esc(u.id)}" class="row-link">
+        <td><span class="name">${logo(u.name, i)} <span>${esc(u.name)}<div class="sub mono">${esc(u.id)}</div></span></span></td>
+        <td class="small">${esc(u.email || "")}</td>
+        <td>${chip("", u.role, "identification-badge")}</td>
+        <td class="small">${esc(u.company || "")}</td>
+        <td><span class="chips">${(u.groups || []).length ? u.groups.map((g) => chip("lilac", g)).join("") : `<span class="muted small">none</span>`}</span></td>
+        <td>${u.can_sign_in ? chip("green", "Member", "sign-in") : chip("", "Managed by admin", "user-gear")}</td>
+        <td class="small">${u.active_tokens}</td>
+        <td class="small">${(u.linked_backends || []).length ? esc(u.linked_backends.join(", ")) : `<span class="muted">none</span>`}</td>
+        <td class="actions"><button class="btn small" data-edit="${esc(u.id)}"><i class="ph ph-pencil-simple"></i> Edit</button></td>
+      </tr>`).join("")
+      : `<tr><td colspan="9">${emptyState("users", "No users", "Add the people who will call the gateway through an AI agent.")}</td></tr>`}
+    </table></div></div>`;
+  $("#btn-add-user").onclick = () => userDialog(null);
+  $("#page").querySelectorAll("[data-edit]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); userDialog(d.items.find((u) => u.id === b.dataset.edit)); });
+  $("#page").querySelectorAll("tr[data-user]").forEach((tr) => tr.onclick = () => userDialog(d.items.find((u) => u.id === tr.dataset.user)));
+};
+
+async function userDialog(u) {
+  const editing = !!u;
+  modal(`<h2><i class="ph ph-${editing ? "user-gear" : "user-plus"}"></i> ${editing ? `Edit ${esc(u.name)}` : "Add a user"}</h2>
+    <form id="usr-form" class="form">
+      <div class="form-2">
+        <label class="field">Bizplay user id <input name="id" value="${esc(u?.id || "")}" placeholder="emp003" pattern="[a-z0-9_-]+" ${editing ? "disabled" : "required"}><span class="muted small">What agent tokens carry as the caller and what the audit log shows.</span></label>
+        <label class="field">Name <input name="name" value="${esc(u?.name || "")}" placeholder="Kim Minji" required></label>
+        <label class="field">Email <input name="email" type="email" value="${esc(u?.email || "")}" placeholder="minji@bizplay.co.kr"></label>
+        <label class="field">Role <select name="role"><option value="employee" ${u?.role === "employee" ? "selected" : ""}>employee</option><option value="manager" ${u?.role === "manager" ? "selected" : ""}>manager</option></select></label>
+        <label class="field">Company <input name="company" value="${esc(u?.company || "Bizplay Demo Co.")}"></label>
+        <label class="field">Access groups <input name="groups" value="${esc((u?.groups || []).join(", "))}" placeholder="finance, hr (comma separated)"></label>
+      </div>
+      <label class="field">Portal password <input name="password" type="password" placeholder="${editing && u.can_sign_in ? "(unchanged)" : "leave empty: no portal sign-in"}" autocomplete="new-password" minlength="6"><span class="muted small">With a password the person signs in as a member and manages their own tokens and linked accounts.</span></label>
+      <div style="display:flex;justify-content:space-between;gap:8px">
+        <span>${editing && u.id !== session.user.user_id ? `<button type="button" class="btn danger" id="usr-delete"><i class="ph ph-trash"></i> Remove</button>` : ""}</span>
+        <span style="display:flex;gap:8px"><button type="button" class="btn" id="usr-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> ${editing ? "Save" : "Add user"}</button></span>
+      </div>
+      <p class="error" id="usr-error"></p></form>`);
+  $("#usr-cancel").onclick = closeModal;
+  if ($("#usr-delete")) $("#usr-delete").onclick = async () => {
+    if (!confirm(`Remove ${u.name}? Their tokens are revoked and their linked accounts dropped.`)) return;
+    try { await api("DELETE", `/api/users/${u.id}`); closeModal(); toast("User removed", u.name); pages.users(); } catch (err) { $("#usr-error").textContent = err.message; }
+  };
+  $("#usr-form").onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    if (!f.password) delete f.password;
+    try {
+      if (editing) await api("PATCH", `/api/users/${u.id}`, f); else await api("POST", "/api/users", f);
+      closeModal(); toast(editing ? "User saved" : "User added", f.name); pages.users();
+    } catch (err) { $("#usr-error").textContent = err.message; }
+  };
+}
+
+// ---- My access: what a signed-in employee can do for themselves ----
+pages.me = async () => {
+  if (hashParam("connected")) { toast("Account linked", `You can now use this backend${hashParam("tools") ? `; ${hashParam("tools")} tools loaded` : ""}`, 6000); setHash("me", {}); return; }
+  if (hashParam("oauth_error")) { toast("Sign-in failed", hashParam("oauth_error"), 7000); setHash("me", {}); return; }
+  const me = session.user;
+  const [toks, reg, gws] = await Promise.all([api("GET", "/api/tokens"), api("GET", "/api/registry"), api("GET", "/api/gateways")]);
+  const oauthBackends = reg.items.filter((p) => p.auth_mode === "oauth");
+  const conns = await Promise.all(oauthBackends.map((p) => api("GET", `/api/registry/${p.id}/connections`).then((c) => c.items[0] || null)));
+  const alive = (t) => !t.revoked && t.expires_at > toks.now;
+  const mine = toks.items.filter(alive);
+  const myGroups = new Set(me.groups || []);
+  const usable = gws.items.filter((g) => { const a = g.access || { mode: "everyone" }; return a.mode === "everyone" || (a.mode === "groups" && (a.groups || []).some((x) => myGroups.has(x))) || (a.mode === "companies" && (a.companies || []).includes(me.company)); });
+  pageActions(`<button class="btn solid" id="btn-issue"><i class="ph ph-plus"></i> Issue token</button>`);
+  $("#page").innerHTML = `
+    <div class="card"><div class="who-card"><span class="avatar">${esc(initials(me.name))}</span><div><div class="who-name">${esc(me.name)}</div><div class="who-meta"><span class="mono">${esc(me.user_id)}</span> · ${esc(me.user_role || "employee")} · ${esc(me.company || "")}${(me.groups || []).length ? ` · groups: ${esc(me.groups.join(", "))}` : ""}</div></div></div></div>
+    <div>
+      <div class="section-head"><h2 class="section-title">My agent tokens</h2><span class="muted small">${mine.length} active</span></div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Token</th><th>Expires</th><th>Last used</th><th></th></tr>
+        ${mine.length ? mine.map((t, i) => `<tr><td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub"><span class="mono">${esc(t.hint)}</span> · ${esc(t.agent)}</div></span></span></td><td class="small nowrap">${esc(fmtDate(t.expires_at))}</td><td class="small nowrap">${t.last_used_at ? esc(fmtTs(t.last_used_at)) : "never"}</td><td class="actions"><button class="btn small danger" data-revoke="${esc(t.id)}"><i class="ph ph-prohibit"></i> Revoke</button></td></tr>`).join("")
+          : `<tr><td colspan="4">${emptyState("key", "No tokens yet", "Issue one and paste it into your AI client. It identifies you on every call.")}</td></tr>`}
+      </table></div></div>
+    </div>
+    <div>
+      <div class="section-head"><h2 class="section-title">Connected accounts</h2><span class="muted small">Backends that need your own sign-in</span></div>
+      <div class="card">
+        ${oauthBackends.length ? oauthBackends.map((p, i) => `<div class="link-row">
+          <div><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub">${conns[i] ? `Linked ${esc(fmtTs(conns[i].connected_at))}${conns[i].expires_at ? `, token renews automatically` : ""}` : `Not linked: your calls to ${esc(p.name)} are refused until you sign in there`}</div></span></span></div>
+          <div>${conns[i] ? `${chip("green", "Linked", "check")} <button class="btn small danger" data-disconnect="${esc(p.id)}"><i class="ph ph-link-break"></i> Disconnect</button>` : `<button class="btn small solid" data-connect="${esc(p.id)}" ${p.oauth_ready ? "" : "disabled"}><i class="ph ph-user-circle-plus"></i> Connect</button>`}</div>
+        </div>`).join("") : `<p class="muted small" style="margin:0">No backend needs a personal sign-in.</p>`}
+      </div>
+    </div>
+    <div>
+      <div class="section-head"><h2 class="section-title">Gateways you can use</h2></div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Gateway</th><th>Address</th><th>Backends</th><th></th></tr>
+        ${usable.length ? usable.map((g) => `<tr><td><strong>${esc(g.name)}</strong></td><td class="mono small url">${esc(g.url)}</td><td class="small">${esc((g.backends || []).map((b) => b.name).join(", "))}</td><td class="actions"><a class="btn small" href="#gateway?g=${esc(g.id)}"><i class="ph ph-robot"></i> How to connect</a></td></tr>`).join("")
+          : `<tr><td colspan="4">${emptyState("squares-four", "No gateway yet", "An admin creates gateways and decides who may use them.")}</td></tr>`}
+      </table></div></div>
+    </div>`;
+  $("#btn-issue").onclick = () => issueDialog(pages.me);
+  $("#page").querySelectorAll("[data-revoke]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Revoke this token? The agent loses access immediately.")) return;
+    try { await api("POST", `/api/tokens/${b.dataset.revoke}/revoke`); toast("Token revoked"); pages.me(); } catch (err) { toast("Revoke failed", err.message, 4500); }
+  });
+  $("#page").querySelectorAll("[data-connect]").forEach((b) => b.onclick = () => connectDialog(reg.items.find((p) => p.id === b.dataset.connect), pages.me));
+  $("#page").querySelectorAll("[data-disconnect]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Disconnect this account? Your calls to it are refused until you link it again.")) return;
+    try { await api("DELETE", `/api/registry/${b.dataset.disconnect}/connections/${me.user_id}`); toast("Account disconnected"); pages.me(); } catch (err) { toast("Disconnect failed", err.message, 4500); }
+  });
+};
+
 pages.audit = async () => {
   const d = await api("GET", "/api/audit?limit=200");
   const filter = hashParam("f") || "all";

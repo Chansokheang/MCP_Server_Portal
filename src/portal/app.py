@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+from datetime import datetime, timezone
 import time
 from pathlib import Path
 
@@ -67,6 +68,30 @@ class NoCacheUIMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# What a member (an employee signed in to serve themselves) may call. Everything else is admin only.
+MEMBER_ROUTES = [
+    ("GET", re.compile(r"^/api/(me|config|tokens|registry|gateways|groups)$")),
+    ("POST", re.compile(r"^/api/(logout|tokens)$")),
+    ("POST", re.compile(r"^/api/tokens/[^/]+/revoke$")),
+    ("GET", re.compile(r"^/api/registry/[^/]+/(connections|tools)$")),
+    ("POST", re.compile(r"^/api/registry/[^/]+/oauth/start$")),
+    ("DELETE", re.compile(r"^/api/registry/[^/]+/connections/[^/]+$")),
+    ("GET", re.compile(r"^/api/endpoints/[^/]+/settings$")),
+]
+
+
+def _member_may(method: str, path: str) -> bool:
+    return any(m == method and rx.match(path) for m, rx in MEMBER_ROUTES)
+
+
+def _is_member(request: Request) -> bool:
+    return getattr(request.state, "role", None) == "member"
+
+
+def _own_user_id(request: Request) -> str | None:
+    return getattr(request.state, "user_id", None)
+
+
 class SessionAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -79,19 +104,39 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
                                     headers={"WWW-Authenticate": 'Bearer realm="bizplay-portal"'})
             request.state.user = session["email"]
             request.state.role = session["role"]
+            request.state.user_id = session.get("user_id")
+            if session["role"] == "member" and not _member_may(request.method, path):
+                return JSONResponse({"error": "admin only: members manage their own tokens and linked accounts"}, status_code=403)
         return await call_next(request)
 
 
 async def login(request: Request):
     body = await request.json()
     state = policy_store.load()
-    user = state["portal_users"].get(body.get("email", "").lower())
-    if not user or user["password"] != body.get("password", ""):
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password", "")
+    staff = state["portal_users"].get(email)
+    member = policy_store.user_by_email(state, email)
+    if staff and staff["password"] == password:
+        session = {"email": email, "role": staff["role"], "user_id": None, "name": staff["name"]}
+    elif member and member.get("password") and member["password"] == password:
+        session = {"email": email, "role": "member", "user_id": member["id"], "name": member["name"]}
+    else:
         raise ApiError(401, "Invalid email or password")
     token = "ps_" + secrets.token_urlsafe(24)
-    state["sessions"][token] = {"email": body["email"].lower(), "role": user["role"], "expires_at": time.time() + SESSION_TTL}
+    state["sessions"][token] = {**session, "expires_at": time.time() + SESSION_TTL}
     policy_store.save(state)
-    return JSONResponse({"token": token, "user": {"email": body["email"].lower(), "name": user["name"], "role": user["role"]}})
+    return JSONResponse({"token": token, "user": _session_user(state, session)})
+
+
+def _session_user(state: dict, session: dict) -> dict:
+    out = {"email": session["email"], "name": session.get("name") or session["email"], "role": session["role"],
+           "user_id": session.get("user_id"), "is_admin": session["role"] != "member"}
+    if session.get("user_id"):
+        u = state.get("users", {}).get(session["user_id"])
+        if u:
+            out.update({"name": u["name"], "company": u.get("company"), "groups": u.get("groups", []), "user_role": u.get("role")})
+    return out
 
 
 async def logout(request: Request):
@@ -104,8 +149,96 @@ async def logout(request: Request):
 
 async def me(request: Request):
     state = policy_store.load()
-    user = state["portal_users"][request.state.user]
-    return JSONResponse({"email": request.state.user, "name": user["name"], "role": user["role"]})
+    _, _, token = request.headers.get("authorization", "").partition(" ")
+    session = state["sessions"][token.strip()]
+    if session["role"] != "member":
+        session = {**session, "name": state["portal_users"].get(request.state.user, {}).get("name", request.state.user)}
+    return JSONResponse(_session_user(state, session))
+
+
+# --- user directory --------------------------------------------------------------
+def _user_stats(state: dict, uid: str) -> dict:
+    now = time.time()
+    tokens = [t for t in state["agent_tokens"].values() if t["sub"] == uid and not t["revoked"] and t["expires_at"] > now]
+    linked = sorted(state.get("user_connections", {}).get(uid, {}).keys())
+    return {"active_tokens": len(tokens), "linked_backends": linked}
+
+
+async def list_users(request: Request):
+    state = policy_store.load()
+    items = [{**policy_store.public_user(u), **_user_stats(state, u["id"])} for u in state["users"].values()]
+    return JSONResponse({"items": sorted(items, key=lambda u: u["id"]), "roles": list(policy_store.USER_ROLES)})
+
+
+def _apply_user_fields(u: dict, body: dict, state: dict) -> None:
+    if "name" in body:
+        u["name"] = " ".join(str(body["name"]).split())[:80] or u.get("name") or u["id"]
+    if "email" in body:
+        email = (body["email"] or "").strip().lower()
+        other = policy_store.user_by_email(state, email) if email else None
+        if other and other["id"] != u["id"]:
+            raise ApiError(409, f"{email} already belongs to {other['id']}")
+        u["email"] = email
+    if "role" in body:
+        if body["role"] not in policy_store.USER_ROLES:
+            raise ApiError(400, "role must be employee or manager")
+        u["role"] = body["role"]
+    if "company" in body:
+        u["company"] = (body["company"] or "").strip() or "Bizplay Demo Co."
+    if "groups" in body:
+        u["groups"] = _listed(body["groups"])
+    if "password" in body:
+        pw = body["password"] or None
+        if pw is not None and len(str(pw)) < 6:
+            raise ApiError(400, "password must be at least 6 characters (or empty for no portal sign-in)")
+        u["password"] = pw
+        if pw and not u.get("email"):
+            raise ApiError(400, "a user who signs in needs an email")
+
+
+async def create_user(request: Request):
+    body = await request.json()
+    state = policy_store.load()
+    uid = re.sub(r"[^a-z0-9_-]", "", (body.get("id") or "").strip().lower())
+    if not uid:
+        raise ApiError(400, "id is required: letters, digits, - or _ (the Bizplay user id agents call with)")
+    if uid in state["users"]:
+        raise ApiError(409, f"user {uid} already exists")
+    u = {"id": uid, "name": uid, "email": "", "role": "employee", "company": "Bizplay Demo Co.", "groups": [], "password": None,
+         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    _apply_user_fields(u, body, state)
+    state["users"][uid] = u
+    policy_store.save(state)
+    return JSONResponse({**policy_store.public_user(u), **_user_stats(state, uid)}, status_code=201)
+
+
+async def update_user(request: Request):
+    body = await request.json()
+    state = policy_store.load()
+    u = state["users"].get(request.path_params["uid"])
+    if not u:
+        raise ApiError(404, "unknown user")
+    _apply_user_fields(u, body, state)
+    policy_store.save(state)
+    return JSONResponse({**policy_store.public_user(u), **_user_stats(state, u["id"])})
+
+
+async def delete_user(request: Request):
+    state = policy_store.load()
+    uid = request.path_params["uid"]
+    if uid not in state["users"]:
+        raise ApiError(404, "unknown user")
+    del state["users"][uid]
+    # Their tokens stop working and their linked accounts are dropped: nothing may act as them.
+    for t in state["agent_tokens"].values():
+        if t["sub"] == uid:
+            t["revoked"] = True
+    state.get("user_connections", {}).pop(uid, None)
+    for tok, sess in list(state["sessions"].items()):
+        if sess.get("user_id") == uid:
+            del state["sessions"][tok]
+    policy_store.save(state)
+    return JSONResponse({"ok": True})
 
 
 async def health(request: Request):
@@ -250,6 +383,9 @@ def _public_provider(p: dict) -> dict:
 
 async def list_registry(request: Request):
     state = policy_store.load()
+    if _is_member(request):
+        items = [_public_provider(p) for p in state["providers"].values() if p.get("status") == "published"]
+        return JSONResponse({"items": items})
     return JSONResponse({"items": [_public_provider(p) for p in state["providers"].values()]})
 
 
@@ -687,10 +823,19 @@ async def oauth_discover(request: Request):
 async def oauth_start(request: Request):
     """Begin linking one user's account: returns the URL to open."""
     body = await request.json()
-    user_id = (body.get("user_id") or "").strip()
+    state = policy_store.load()
+    user_id = _own_user_id(request) if _is_member(request) else (body.get("user_id") or "").strip()
     if not user_id:
         raise ApiError(400, "user_id is required: the Bizplay user whose account is being linked")
-    state = policy_store.load()
+    if user_id not in state["users"]:
+        # An admin linking an account for someone new: put them in the directory as they go.
+        user_id = re.sub(r"[^a-z0-9_-]", "", user_id.lower())
+        if not user_id:
+            raise ApiError(400, "user id: letters, digits, - or _")
+        u = {"id": user_id, "name": user_id, "email": "", "role": "employee", "company": "Bizplay Demo Co.", "groups": [],
+             "password": None, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        _apply_user_fields(u, {k: body[k] for k in ("name", "role", "company", "groups") if k in body}, state)
+        state["users"][user_id] = u
     p = _get_provider(state, request.path_params["pid"])
     if p.get("auth_mode") != "oauth":
         raise ApiError(409, "this backend is not in OAuth mode")
@@ -728,15 +873,29 @@ async def oauth_callback(request: Request):
     return RedirectResponse(f"/#provider?p={provider['id']}&connected={pending['user_id']}{loaded}", status_code=303)
 
 
+def _named(state: dict, rows: list[dict]) -> list[dict]:
+    """Add the directory name to rows that carry a user id (tokens use `sub`, connections `user_id`)."""
+    users = state.get("users", {})
+    for r in rows:
+        uid = r.get("user_id") or r.get("sub")
+        r["user_name"] = users.get(uid, {}).get("name") or uid
+    return rows
+
+
 async def list_connections(request: Request):
     state = policy_store.load()
     p = _get_provider(state, request.path_params["pid"])
-    return JSONResponse({"provider": p["id"], "items": oauth.public_connections(state, p["id"]), "now": time.time()})
+    items = _named(state, oauth.public_connections(state, p["id"]))
+    if _is_member(request):
+        items = [c for c in items if c["user_id"] == _own_user_id(request)]
+    return JSONResponse({"provider": p["id"], "items": items, "now": time.time()})
 
 
 async def delete_connection(request: Request):
     state = policy_store.load()
     p = _get_provider(state, request.path_params["pid"])
+    if _is_member(request) and request.path_params["user_id"] != _own_user_id(request):
+        raise ApiError(403, "you can only disconnect your own account")
     if not oauth.disconnect(state, p["id"], request.path_params["user_id"]):
         raise ApiError(404, "no linked account for that user")
     policy_store.save(state)
@@ -895,30 +1054,46 @@ async def list_tokens(request: Request):
     state = policy_store.load()
     items = sorted((policy_store.public_token(t) for t in state["agent_tokens"].values()),
                    key=lambda t: t["created_at"], reverse=True)
-    return JSONResponse({"items": items, "now": time.time()})
+    if _is_member(request):
+        items = [t for t in items if t["sub"] == _own_user_id(request)]
+    return JSONResponse({"items": _named(state, items), "now": time.time()})
 
 
 async def issue_token(request: Request):
+    """Issue a token for a directory user. Role, company and groups come from the directory.
+
+    An admin may still pass them explicitly (the API used to require that); then the
+    directory entry is updated to match, or created for an id not seen before, so the
+    directory stays the one place that says who a user is. Members issue only for themselves.
+    """
     body = await request.json()
     state = policy_store.load()
-    role = body.get("role")
-    if role not in ("employee", "manager"):
-        raise ApiError(400, "role must be employee or manager")
+    user_id = _own_user_id(request) if _is_member(request) else (body.get("user_id") or "").strip()
+    if not user_id:
+        raise ApiError(400, "user_id is required")
     ttl = int(body.get("ttl_days") or state["security"]["token_ttl_days"])
     if not 1 <= ttl <= 365:
         raise ApiError(400, "ttl_days must be between 1 and 365")
-    groups = body.get("groups") or []
-    if isinstance(groups, str):
-        groups = groups.split(",")
+    user = state["users"].get(user_id)
+    explicit = {k: body[k] for k in ("role", "company", "groups") if k in body and not _is_member(request)}
+    if user is None:
+        if "role" not in explicit:
+            raise ApiError(400, f"unknown user '{user_id}': pick 'Someone not listed' to add them, or add them on the Users page")
+        user_id = re.sub(r"[^a-z0-9_-]", "", user_id.lower())
+        if not user_id:
+            raise ApiError(400, "user id: letters, digits, - or _")
+        user = {"id": user_id, "name": (body.get("name") or "").strip() or user_id, "email": "", "role": "employee", "company": "Bizplay Demo Co.",
+                "groups": [], "password": None, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        state["users"][user_id] = user
+    if explicit:
+        _apply_user_fields(user, explicit, state)
     token, record = policy_store.issue_agent_token(
-        state, label=(body.get("label") or "Untitled").strip(), user_id=(body.get("user_id") or "").strip(),
-        role=role, company=(body.get("company") or "Bizplay Demo Co.").strip(),
-        agent=body.get("agent") or "Claude Desktop", ttl_days=ttl, created_by=request.state.user, groups=groups,
+        state, label=(body.get("label") or "Untitled").strip(), user_id=user_id,
+        role=user["role"], company=user.get("company") or "Bizplay Demo Co.",
+        agent=body.get("agent") or "Claude Desktop", ttl_days=ttl, created_by=request.state.user, groups=user.get("groups", []),
     )
-    if not record["sub"]:
-        raise ApiError(400, "user_id is required")
     policy_store.save(state)
-    return JSONResponse({"token": token, "record": policy_store.public_token(record)}, status_code=201)
+    return JSONResponse({"token": token, "record": _named(state, [policy_store.public_token(record)])[0]}, status_code=201)
 
 
 async def revoke_token(request: Request):
@@ -926,6 +1101,8 @@ async def revoke_token(request: Request):
     record = state["agent_tokens"].get(request.path_params["tid"])
     if not record:
         raise ApiError(404, "unknown token")
+    if _is_member(request) and record["sub"] != _own_user_id(request):
+        raise ApiError(403, "you can only revoke your own tokens")
     record["revoked"] = True
     policy_store.save(state)
     return JSONResponse(policy_store.public_token(record))
@@ -1085,6 +1262,10 @@ app = Starlette(
         Route("/api/gateways", create_gateway, methods=["POST"]),
         Route("/api/gateways/{gid}", update_gateway, methods=["PATCH"]),
         Route("/api/gateways/{gid}", delete_gateway, methods=["DELETE"]),
+        Route("/api/users", list_users),
+        Route("/api/users", create_user, methods=["POST"]),
+        Route("/api/users/{uid}", update_user, methods=["PATCH"]),
+        Route("/api/users/{uid}", delete_user, methods=["DELETE"]),
         Route("/api/tokens", list_tokens),
         Route("/api/tokens", issue_token, methods=["POST"]),
         Route("/api/tokens/{tid}/revoke", revoke_token, methods=["POST"]),
