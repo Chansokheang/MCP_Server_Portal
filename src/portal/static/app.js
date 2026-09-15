@@ -886,7 +886,7 @@ pages.tokens = async () => {
     <div class="table-card"><div class="table-wrap"><table>
       <tr><th>Token</th><th>Bizplay user</th><th>Company</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr>
       ${items.length ? items.map((t, i) => `<tr title="Issued by ${esc(t.created_by)}">
-        <td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub"><span class="mono">${esc(t.hint)}</span> · ${esc(t.agent)}</div></span></span></td>
+        <td><span class="name">${logo(t.label, i)} <span>${esc(t.label)}<div class="sub mono">${esc(t.hint)}</div></span></span></td>
         <td class="nowrap"><strong>${esc(t.user_name || t.sub)}</strong><div class="sub"><span class="mono">${esc(t.sub)}</span> · ${esc(t.role)}${(t.groups || []).length ? ` · ${esc(t.groups.join(", "))}` : ""}</div></td>
         <td class="small">${esc(t.company)}</td>
         <td>${stateChip[state(t)]}</td>
@@ -943,10 +943,7 @@ async function issueDialog(after) {
     <form id="tok-form" class="form">
       <label class="field">Label <input name="label" placeholder="${esc(users[0].name.split(" ")[0])}'s Claude Desktop" required></label>
       ${isAdmin() ? userPicker(users, me.user_id || users[0].id) : `<div class="who-card"><span class="avatar">${esc(initials(me.name))}</span><div><div class="who-name">${esc(me.name)}</div><div class="who-meta"><span class="mono">${esc(me.user_id)}</span> · ${esc(me.user_role || "employee")}${(me.groups || []).length ? ` · ${esc(me.groups.join(", "))}` : ""}</div></div></div>`}
-      <div class="form-2">
-        <label class="field">AI agent <select name="agent"><option>Claude Desktop</option><option>Claude.ai</option><option>ChatGPT</option><option>Microsoft Copilot Studio</option><option>Salesforce Agentforce</option></select></label>
-        <label class="field">Expires in (days) <input name="ttl_days" type="number" value="30" min="1" max="365"></label>
-      </div>
+      <label class="field">Expires in (days) <input name="ttl_days" type="number" value="30" min="1" max="365"><span class="muted small">The token works from any MCP client; say which one in the label.</span></label>
       <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="tok-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Issue</button></div>
       <p class="error" id="tok-error"></p></form>`);
   if (isAdmin()) bindUserPicker(users);
@@ -954,7 +951,7 @@ async function issueDialog(after) {
   $("#tok-form").onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
     try {
-      const r = await api("POST", "/api/tokens", { label: f.label, agent: f.agent, ttl_days: f.ttl_days, ...(isAdmin() ? pickedUser(f) : {}) });
+      const r = await api("POST", "/api/tokens", { label: f.label, ttl_days: f.ttl_days, ...(isAdmin() ? pickedUser(f) : {}) });
       modal(`<h2><i class="ph ph-check-circle"></i> Token issued</h2><p>Copy it now. It will not be shown again.</p>
         <div class="token-box"><code id="tok-value">${esc(r.token)}</code><button class="btn small" id="tok-copy"><i class="ph ph-copy"></i> Copy</button></div>
         <h2 class="section-title" style="margin-top:16px">Use it from any MCP client</h2>
@@ -1547,7 +1544,7 @@ pages.me = async () => {
       <div class="section-head"><h2 class="section-title">My agent tokens</h2><span class="muted small">${mine.length} active</span></div>
       <div class="table-card"><div class="table-wrap"><table>
         <tr><th>Token</th><th>Expires</th><th>Last used</th><th></th></tr>
-        ${mine.length ? mine.map((t, i) => `<tr><td><span class="name">${logo(t.agent, i)} <span>${esc(t.label)}<div class="sub"><span class="mono">${esc(t.hint)}</span> · ${esc(t.agent)}</div></span></span></td><td class="small nowrap">${esc(fmtDate(t.expires_at))}</td><td class="small nowrap">${t.last_used_at ? esc(fmtTs(t.last_used_at)) : "never"}</td><td class="actions"><button class="btn small danger" data-revoke="${esc(t.id)}"><i class="ph ph-prohibit"></i> Revoke</button></td></tr>`).join("")
+        ${mine.length ? mine.map((t, i) => `<tr><td><span class="name">${logo(t.label, i)} <span>${esc(t.label)}<div class="sub mono">${esc(t.hint)}</div></span></span></td><td class="small nowrap">${esc(fmtDate(t.expires_at))}</td><td class="small nowrap">${t.last_used_at ? esc(fmtTs(t.last_used_at)) : "never"}</td><td class="actions"><button class="btn small danger" data-revoke="${esc(t.id)}"><i class="ph ph-prohibit"></i> Revoke</button></td></tr>`).join("")
           : `<tr><td colspan="4">${emptyState("key", "No tokens yet", "Issue one and paste it into your AI client. It identifies you on every call.")}</td></tr>`}
       </table></div></div>
     </div>

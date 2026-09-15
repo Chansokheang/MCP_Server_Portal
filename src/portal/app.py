@@ -1090,7 +1090,7 @@ async def issue_token(request: Request):
     token, record = policy_store.issue_agent_token(
         state, label=(body.get("label") or "Untitled").strip(), user_id=user_id,
         role=user["role"], company=user.get("company") or "Bizplay Demo Co.",
-        agent=body.get("agent") or "Claude Desktop", ttl_days=ttl, created_by=request.state.user, groups=user.get("groups", []),
+        agent=body.get("agent") or "MCP client", ttl_days=ttl, created_by=request.state.user, groups=user.get("groups", []),
     )
     policy_store.save(state)
     return JSONResponse({"token": token, "record": _named(state, [policy_store.public_token(record)])[0]}, status_code=201)
