@@ -78,13 +78,22 @@ def namespace_for(provider_id: str) -> str:
     return provider_id.replace("-", "_")
 
 
+def _request_state() -> dict:
+    try:
+        return get_http_request().scope.get("state") or {}
+    except RuntimeError:
+        return {}
+
+
 def standalone_provider() -> str | None:
     """The provider id when the request came in on /mcp/<id>, else None."""
-    try:
-        request = get_http_request()
-    except RuntimeError:
-        return None
-    return (request.scope.get("state") or {}).get("standalone")
+    return _request_state().get("standalone")
+
+
+def gateway_scope() -> set[str] | None:
+    """The provider ids a named gateway (/mcp/<gateway id>) serves, else None for everything."""
+    ids = _request_state().get("gateway_providers")
+    return set(ids) if ids is not None else None
 
 
 class GovernanceMiddleware(Middleware):
@@ -118,6 +127,7 @@ class GovernanceMiddleware(Middleware):
         principal = current_principal()
         role = principal.claims.get("role", "employee")
         only = standalone_provider()
+        scope = gateway_scope()
         visible = []
         for tool in tools:
             parts = self.split(tool.name)
@@ -126,6 +136,8 @@ class GovernanceMiddleware(Middleware):
                     visible.append(tool)
                 continue
             if only is not None and parts[0] != only:
+                continue
+            if scope is not None and parts[0] not in scope:
                 continue
             allowed, _ = policy_store.check_tool_access(state, parts[0], parts[1], role, principal.claims)
             if not allowed:
@@ -166,6 +178,11 @@ class GovernanceMiddleware(Middleware):
         if parts is None:
             return await call_next(context)
         pid, op = parts
+        scope = gateway_scope()
+        if scope is not None and pid not in scope:
+            reason = f"'{name}' is not part of this gateway"
+            audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
+            raise ToolError(f"Access denied: {reason}")
 
         state = policy_store.load()
         allowed, reason = policy_store.check_tool_access(state, pid, op, role, principal.claims)
@@ -345,16 +362,22 @@ class RegistryASGI:
         if scope["type"] == "http":
             path = scope["path"]
             if path.startswith("/mcp/") and path.strip("/") != "mcp":
-                pid = path[len("/mcp/"):].strip("/")
-                p = policy_store.load()["providers"].get(pid)
-                if not p or p.get("status") != "published" or not p.get("standalone"):
-                    body = json.dumps({"error": f"No MCP server is deployed at /mcp/{pid}. "
-                                                "Deploy it from the provider's page in the portal, or use /mcp."}).encode()
+                key = path[len("/mcp/"):].strip("/")
+                state = policy_store.load()
+                p = state["providers"].get(key)
+                g = state["gateways"].get(key)
+                if p and p.get("status") == "published" and p.get("standalone"):
+                    extra = {"standalone": key}
+                elif g:
+                    extra = {"gateway_providers": list(g.get("providers") or [])}
+                else:
+                    body = json.dumps({"error": f"Nothing is served at /mcp/{key}. It is neither a deployed MCP server "
+                                                "nor a named gateway; use /mcp for everything."}).encode()
                     await send({"type": "http.response.start", "status": 404,
                                 "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
                     await send({"type": "http.response.body", "body": body})
                     return
-                scope = {**scope, "path": "/mcp", "raw_path": b"/mcp", "state": {**(scope.get("state") or {}), "standalone": pid}}
+                scope = {**scope, "path": "/mcp", "raw_path": b"/mcp", "state": {**(scope.get("state") or {}), **extra}}
         await self.inner(scope, receive, send)
 
 

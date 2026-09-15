@@ -159,7 +159,7 @@ function enterApp() {
 
 // ---- router ----
 const pages = {};
-const titles = { overview: "Overview", registry: "MCP Registry", servers: "MCP Servers", provider: "Backend details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
+const titles = { overview: "Overview", registry: "MCP Registry", gateways: "MCP Gateways", servers: "MCP Servers", provider: "Backend details", access: "Access Control", tokens: "Agent Tokens", security: "Security", audit: "Audit Log" };
 // Pages reached from another page keep that page's nav item lit.
 const RAIL_OF = { provider: "registry" };
 function hashParam(name) { return new URLSearchParams(location.hash.split("?")[1] || "").get(name); }
@@ -326,6 +326,68 @@ pages.registry = async () => {
     } catch (err) { toast("Action failed", err.message, 4500); }
   });
 };
+
+// ---- MCP Gateways: a chosen set of backends on their own URL ----
+pages.gateways = async () => {
+  const [gw, reg] = await Promise.all([api("GET", "/api/gateways"), api("GET", "/api/registry")]);
+  const servable = reg.items.filter((p) => p.has_spec || p.kind === "mcp");
+  const all = { id: "", name: "Everything", url: (SERVER.public_mcp_url || location.origin + "/mcp"), backends: servable.filter((p) => p.status === "published"), tools_enabled: servable.filter((p) => p.status === "published").reduce((n, p) => n + p.tools_enabled, 0), builtin: true };
+  pageActions(`<button class="btn solid" id="btn-new-gateway"><i class="ph ph-plus"></i> New gateway</button>`);
+  renderTabs([{ key: "all", label: "Gateways", icon: "squares-four", count: gw.items.length + 1 }], "all", () => {},
+    { title: `${gw.items.length} named gateway(s)`, sub: "plus the shared endpoint" });
+
+  const row = (g, i) => `<tr class="row-link" data-gid="${esc(g.id)}">
+      <td><span class="name">${logo(g.name, i)} <span>${esc(g.name)}<div class="sub">${g.builtin ? "every backend the caller is entitled to" : esc(g.description || g.id)}</div></span></span></td>
+      <td class="mono small url">${esc(g.url)}<div class="sub">tools prefixed by backend id</div></td>
+      <td><div class="chips">${g.backends.length ? g.backends.map((b) => chip(b.status === "published" ? "lilac" : "amber", b.name, b.status === "published" ? "" : "pencil-simple")).join("") : chip("", "none")}</div></td>
+      <td><span class="mono">${g.tools_enabled}</span></td>
+      <td class="actions">
+        <button class="btn small" data-act="setup" data-gid="${esc(g.id)}"><i class="ph ph-robot"></i> Setup</button>
+        ${g.builtin ? "" : `<button class="btn small link" data-act="edit" data-gid="${esc(g.id)}"><i class="ph ph-pencil-simple"></i> Edit</button><button class="btn small danger" data-act="delete" data-gid="${esc(g.id)}"><i class="ph ph-trash"></i></button>`}
+      </td></tr>`;
+  $("#page").innerHTML = `
+    <div class="table-card"><div class="table-wrap"><table>
+      <tr><th>Gateway</th><th>Endpoint</th><th>Backends</th><th>Tools</th><th></th></tr>
+      ${row(all, 0)}${gw.items.map((g, i) => row(g, i + 1)).join("")}
+    </table></div></div>
+    <div class="callout"><i class="ph ph-info"></i><span>A named gateway is one address that serves a chosen set of backends, prefixed like the shared endpoint: one connector for a team or a product line, without giving out everything. Entitlements, tool policy, tokens and audit apply unchanged. For a single backend with plain tool names, deploy it as an MCP server instead.</span></div>`;
+
+  $("#btn-new-gateway").onclick = () => gatewayDialog(null, servable);
+  $("#page").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
+    const { act, gid } = b.dataset;
+    const g = gid ? gw.items.find((x) => x.id === gid) : all;
+    if (act === "setup") return commandDialog({ id: g.id || "bizplay-gateway", name: g.name }, { url: g.url, prefix: "", standalone: false, label: g.name });
+    if (act === "edit") return gatewayDialog(g, servable);
+    if (act === "delete") {
+      if (!confirm(`Delete gateway ${g.name}? Its address stops answering at once; the backends stay registered.`)) return;
+      try { await api("DELETE", `/api/gateways/${gid}`); toast("Gateway deleted", g.url); pages.gateways(); } catch (err) { toast("Delete failed", err.message, 4500); }
+    }
+  });
+};
+
+function gatewayDialog(g, servable) {
+  const picked = new Set(g ? g.backends.map((b) => b.id) : []);
+  modal(`<h2><i class="ph ph-squares-four"></i> ${g ? "Edit gateway" : "New gateway"}</h2>
+    <form id="gw-form" class="form">
+      <label class="field">Name <input name="name" value="${esc(g?.name || "")}" placeholder="e.g. Finance Suite" required ${g ? "readonly" : ""}>
+        ${g ? "" : `<span class="muted small">Becomes the address: ${esc(SERVER.public_mcp_url || location.origin + "/mcp")}/&lt;name&gt;</span>`}</label>
+      <label class="field">Description <input name="description" value="${esc(g?.description || "")}" placeholder="who this gateway is for"></label>
+      <div class="field"><span>Backends served</span>
+        <div class="card" style="padding:10px 14px;gap:6px">${servable.length ? servable.map((p) => `<label class="check"><input type="checkbox" name="providers" value="${esc(p.id)}" ${picked.has(p.id) ? "checked" : ""}> ${esc(p.name)} <span class="muted small">${p.tools_enabled} tools${p.status === "published" ? "" : ", draft"}</span></label>`).join("") : `<span class="muted small">Register a backend first.</span>`}</div></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="gw-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> ${g ? "Save" : "Create gateway"}</button></div>
+      <p class="error" id="gw-error"></p>
+    </form>`);
+  $("#gw-cancel").onclick = closeModal;
+  $("#gw-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = { name: f.get("name"), description: f.get("description"), providers: f.getAll("providers") };
+    try {
+      const r = g ? await api("PATCH", `/api/gateways/${g.id}`, body) : await api("POST", "/api/gateways", body);
+      closeModal(); toast(g ? "Gateway updated" : "Gateway created", `${r.name} answers at ${r.url}`, 6000); pages.gateways();
+    } catch (err) { $("#gw-error").textContent = err.message; }
+  };
+}
 
 // ---- MCP Servers: one deployed server per product, next to the shared gateway ----
 pages.servers = async () => {

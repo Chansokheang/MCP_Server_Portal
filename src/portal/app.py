@@ -698,6 +698,71 @@ async def refresh_tools(request: Request):
     return JSONResponse({**_public_provider(p), "note": f"Tool list refreshed: {len(fresh)} tool(s)."})
 
 
+# --- named gateways: a chosen set of backends on their own URL ---------------------
+def _public_gateway(state: dict, g: dict) -> dict:
+    providers = [state["providers"][pid] for pid in g.get("providers", []) if pid in state["providers"]]
+    return {**g, "url": policy_store.gateway_url(state, g),
+            "backends": [{"id": p["id"], "name": p["name"], "status": p.get("status"),
+                          "tools_enabled": sum(t["enabled"] for t in p["tools"].values())} for p in providers],
+            "tools_enabled": sum(t["enabled"] for p in providers if p.get("status") == "published" for t in p["tools"].values())}
+
+
+def _gateway_providers(state: dict, value) -> list[str]:
+    ids = _listed(value)
+    unknown = [i for i in ids if i not in state["providers"]]
+    if unknown:
+        raise ApiError(400, f"unknown backend(s): {', '.join(unknown)}")
+    servable = [i for i in ids if state["providers"][i].get("spec") or state["providers"][i].get("kind") == "mcp"]
+    if not servable:
+        raise ApiError(400, "pick at least one registered backend (the curated Bizplay server is not served by the registry gateway)")
+    return servable
+
+
+async def list_gateways(request: Request):
+    state = policy_store.load()
+    return JSONResponse({"items": [_public_gateway(state, g) for g in state["gateways"].values()]})
+
+
+async def create_gateway(request: Request):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise ApiError(400, "name is required")
+    state = policy_store.load()
+    gid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "gateway"
+    if gid in state["gateways"] or gid in state["providers"]:
+        raise ApiError(409, f"'{gid}' is already used by another gateway or backend; pick another name")
+    g = {"id": gid, "name": name, "providers": _gateway_providers(state, body.get("providers")),
+         "description": (body.get("description") or "").strip(), "owner": request.state.user, "created_at": _now_iso()}
+    state["gateways"][gid] = g
+    policy_store.save(state)
+    return JSONResponse(_public_gateway(state, g), status_code=201)
+
+
+async def update_gateway(request: Request):
+    body = await request.json()
+    state = policy_store.load()
+    g = state["gateways"].get(request.path_params["gid"])
+    if not g:
+        raise ApiError(404, "unknown gateway")
+    if body.get("name", "").strip():
+        g["name"] = body["name"].strip()
+    if "description" in body:
+        g["description"] = (body["description"] or "").strip()
+    if "providers" in body:
+        g["providers"] = _gateway_providers(state, body["providers"])
+    policy_store.save(state)
+    return JSONResponse(_public_gateway(state, g))
+
+
+async def delete_gateway(request: Request):
+    state = policy_store.load()
+    if state["gateways"].pop(request.path_params["gid"], None) is None:
+        raise ApiError(404, "unknown gateway")
+    policy_store.save(state)
+    return JSONResponse({"ok": True})
+
+
 # --- tools / access control -----------------------------------------------------
 async def list_tools(request: Request):
     state = policy_store.load()
@@ -853,6 +918,10 @@ app = Starlette(
         Route("/api/registry/{pid}/{action}", set_provider_status, methods=["POST"]),
         Route("/oauth/callback", oauth_callback),
         Route("/api/groups", list_groups),
+        Route("/api/gateways", list_gateways),
+        Route("/api/gateways", create_gateway, methods=["POST"]),
+        Route("/api/gateways/{gid}", update_gateway, methods=["PATCH"]),
+        Route("/api/gateways/{gid}", delete_gateway, methods=["DELETE"]),
         Route("/api/tokens", list_tokens),
         Route("/api/tokens", issue_token, methods=["POST"]),
         Route("/api/tokens/{tid}/revoke", revoke_token, methods=["POST"]),

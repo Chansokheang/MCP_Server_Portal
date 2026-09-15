@@ -74,6 +74,8 @@ def _seed_state() -> dict:
         # Per-user OAuth tokens for backends in "oauth" mode: user id -> provider id -> tokens.
         "user_connections": {},
         "oauth_pending": {},
+        # Named gateways: a chosen set of backends served on /mcp/<id>, prefixed like /mcp.
+        "gateways": {},
         "security": {
             # The address agents use, when it differs from what this server
             # listens on (a tunnel, or nginx with a certificate in front).
@@ -157,6 +159,7 @@ def load() -> dict:
         # State files written before these sections existed.
         state.setdefault("user_connections", {})
         state.setdefault("oauth_pending", {})
+        state.setdefault("gateways", {})
         return state
 
 
@@ -282,6 +285,12 @@ def published_registry_providers(state: dict) -> list[dict]:
     """Published providers the registry gateway serves: OpenAPI-backed or proxied MCP servers."""
     return [p for p in state["providers"].values()
             if p.get("status") == "published" and (p.get("spec") or p.get("kind") == "mcp")]
+
+
+def gateway_url(state: dict, gateway: dict) -> str:
+    """A named gateway lives next to the shared endpoint: <public endpoint>/<gateway id>."""
+    base = (state["security"].get("public_mcp_url") or "").strip() or public_url("registry")
+    return base.rstrip("/") + "/" + gateway["id"]
 
 
 def standalone_url(provider: dict) -> str:
