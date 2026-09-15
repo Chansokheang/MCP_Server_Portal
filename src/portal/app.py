@@ -28,7 +28,8 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, RedirectResponse
+from starlette.exceptions import HTTPException
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -911,6 +912,64 @@ async def api_error(request: Request, exc: ApiError):
     return JSONResponse({"error": exc.message}, status_code=exc.status)
 
 
+def wants_html(request: Request) -> bool:
+    """Browsers say text/html; agents and scripts say json or event-stream (or nothing)."""
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept and not request.url.path.startswith("/api/")
+
+
+ERROR_COPY = {
+    404: ("Page not found", "There is nothing at this address. The portal lives at the root, and MCP endpoints are under /mcp."),
+    405: ("Method not allowed", "This address exists, but not for that HTTP method."),
+    500: ("Something went wrong", "The portal hit an error it did not expect. It has been logged; try again, and tell the admin if it keeps happening."),
+    502: ("Backend did not answer", "An upstream service the portal depends on is unreachable right now."),
+}
+
+
+def error_html(status: int, title: str | None = None, detail: str | None = None, path: str = "") -> str:
+    """A small self-contained page in the portal's own language, for browsers only."""
+    t, d = ERROR_COPY.get(status, ("Error", ""))
+    title, detail = title or t, detail or d
+    safe = lambda v: str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{status} · Bizplay MCP Portal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root {{ --canvas:#f4f6fa; --surface:#fff; --line:#e4e8ef; --ink:#1c2433; --ink-2:#4a5568; --ink-3:#66727f; --primary:#2f6bff; --primary-hover:#245be0; --primary-soft:#eaf0ff; --primary-ink:#1f4fc4; --mono: "Geist Mono", ui-monospace, Consolas, monospace; }}
+  * {{ box-sizing:border-box }} body {{ margin:0; min-height:100dvh; display:grid; place-items:center; padding:24px; background:var(--canvas); color:var(--ink); font:14px/1.5 "Pretendard","Segoe UI",system-ui,sans-serif; -webkit-font-smoothing:antialiased }}
+  .card {{ width:min(520px,100%); background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:32px; box-shadow:0 1px 2px rgb(28 36 51/.05),0 4px 16px rgb(28 36 51/.06) }}
+  .brand {{ display:flex; align-items:center; gap:10px; margin-bottom:22px; font-weight:800; font-size:18px; letter-spacing:-.02em }}
+  .mark {{ width:30px; height:30px; border-radius:8px; background:var(--primary); color:#fff; display:grid; place-items:center; font-size:15px }}
+  .code {{ font-size:56px; font-weight:800; letter-spacing:-.03em; color:var(--primary); line-height:1; margin:0 0 8px }}
+  h1 {{ font-size:20px; margin:0 0 6px }} p {{ margin:0 0 10px; color:var(--ink-2) }}
+  .path {{ display:inline-block; margin:6px 0 18px; padding:4px 10px; border-radius:6px; background:var(--primary-soft); color:var(--primary-ink); font-family:var(--mono); font-size:12px; word-break:break-all }}
+  .btn {{ display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 14px; border-radius:8px; border:1px solid #cfd6e0; background:#fff; color:var(--ink); font:inherit; font-weight:500; text-decoration:none; cursor:pointer }}
+  .btn.solid {{ background:var(--primary); border-color:var(--primary); color:#fff }} .btn.solid:hover {{ background:var(--primary-hover) }} .btn + .btn {{ margin-left:8px }}
+  .hint {{ margin-top:18px; color:var(--ink-3); font-size:12px }}
+</style></head><body>
+<main class="card">
+  <div class="brand"><span class="mark">&#9679;</span> bizplay <span style="font-weight:500;color:var(--ink-3)">MCP Portal</span></div>
+  <p class="code">{status}</p>
+  <h1>{safe(title)}</h1>
+  <p>{safe(detail)}</p>
+  {f'<span class="path">{safe(path)}</span><br>' if path else ''}
+  <a class="btn solid" href="/">Open the portal</a><a class="btn" href="javascript:history.back()">Go back</a>
+  <p class="hint">Agents connect to <span style="font-family:var(--mono)">/mcp</span>, not to this page. If you followed a link from the portal, the item may have been deleted.</p>
+</main></body></html>"""
+
+
+async def http_error(request: Request, exc: HTTPException):
+    if wants_html(request):
+        return HTMLResponse(error_html(exc.status_code, path=request.url.path), status_code=exc.status_code)
+    return JSONResponse({"error": exc.detail or ERROR_COPY.get(exc.status_code, ("Error", ""))[0]}, status_code=exc.status_code)
+
+
+async def server_error(request: Request, exc: Exception):
+    if wants_html(request):
+        return HTMLResponse(error_html(500, path=request.url.path), status_code=500)
+    return JSONResponse({"error": "internal error; see the portal log"}, status_code=500)
+
+
 app = Starlette(
     routes=[
         Route("/", index),
@@ -948,7 +1007,7 @@ app = Starlette(
         Route("/api/audit", audit_log),
         Mount("/static", StaticFiles(directory=STATIC_DIR), name="static"),
     ],
-    exception_handlers={ApiError: api_error},
+    exception_handlers={ApiError: api_error, HTTPException: http_error, 500: server_error},
     middleware=[Middleware(NoCacheUIMiddleware), Middleware(SessionAuthMiddleware)],
 )
 

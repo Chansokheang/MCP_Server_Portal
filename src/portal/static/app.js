@@ -90,6 +90,17 @@ $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") clos
 
 const SKELETON = `<div class="skeleton" aria-busy="true"><div class="bar w-40"></div><div class="bar tall"></div><div class="bar w-70"></div><div class="bar tall"></div></div>`;
 const emptyState = (icon, title, hint) => `<div class="empty"><span class="mark"><i class="ph ph-${icon}"></i></span><strong>${title}</strong><span class="small">${hint}</span></div>`;
+/** Full-page state for a route that has nothing to show: not found, deleted, or failed to load. */
+const errorPage = ({ code = "", title, detail, actions = [] }) => `
+  <div class="error-page">
+    ${code ? `<p class="error-code">${esc(code)}</p>` : `<span class="mark"><i class="ph ph-warning-circle"></i></span>`}
+    <h2>${esc(title)}</h2>
+    <p class="muted" style="max-width:56ch">${esc(detail)}</p>
+    <div class="error-actions">${actions.map((a) => `<a class="btn ${a.primary ? "solid" : ""}" href="${esc(a.href)}">${a.icon ? `<i class="ph ph-${a.icon}"></i> ` : ""}${esc(a.label)}</a>`).join("")}</div>
+  </div>`;
+const notFoundPage = (what, backHref, backLabel) => errorPage({ code: "404", title: `${what} not found`,
+  detail: "It may have been deleted, or the link is out of date. Nothing on the gateway was changed by opening this page.",
+  actions: [{ href: backHref, label: backLabel, icon: "arrow-left", primary: true }, { href: "#overview", label: "Overview" }] });
 const chip = (kind, text, icon) => `<span class="chip ${kind}">${icon ? `<i class="ph ph-${icon}"></i>` : ""}${esc(text)}</span>`;
 const tile = (icon, k, v, mono = false) => `<div class="tile"><span class="k"><i class="ph ph-${icon}"></i>${esc(k)}</span><span class="v ${mono ? "mono" : ""}">${esc(v)}</span></div>`;
 const LOGO_COLORS = ["green", "lilac", "amber", "dark", "red"];
@@ -178,7 +189,13 @@ function crumbs(...trail) {
 function pageActions(html) { $("#page-actions").innerHTML = html || ""; }
 function go(page) {
   page = (page || "").split("?")[0];
-  if (!pages[page]) page = "overview";
+  if (!pages[page]) {
+    document.querySelectorAll(".side-nav a").forEach((a) => a.classList.remove("active"));
+    $("#page-title").textContent = "Not found"; crumbs({ page: "overview", label: "Not found" }); pageActions(""); $("#tabs").classList.add("hidden");
+    $("#page").innerHTML = errorPage({ code: "404", title: "No such page", detail: `There is no page called "${page}". Pick one from the menu.`,
+      actions: [{ href: "#overview", label: "Overview", icon: "house", primary: true }, { href: "#registry", label: "MCP Registry" }] });
+    return;
+  }
   if (location.hash.slice(1).split("?")[0] !== page) location.hash = page;
   const rail = RAIL_OF[page] || page;
   document.querySelectorAll(".side-nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === rail));
@@ -188,7 +205,11 @@ function go(page) {
   $("#global-search").value = "";
   $("#tabs").classList.add("hidden");
   $("#page").innerHTML = SKELETON;
-  pages[page]().catch((err) => { $("#page").innerHTML = `<div class="card">${emptyState("warning-circle", "Could not load this page", esc(err.message))}<div style="text-align:center"><button class="btn" onclick="location.reload()">Retry</button></div></div>`; });
+  pages[page]().catch((err) => {
+    $("#page").innerHTML = errorPage({ title: "Could not load this page", detail: `${err.message}. The portal could not get what it needs from the server; nothing was changed.`,
+      actions: [{ href: location.hash || "#overview", label: "Try again", icon: "arrows-clockwise", primary: true }, { href: "#overview", label: "Overview" }] });
+    $("#page").querySelector(".error-actions a.solid").onclick = (e) => { e.preventDefault(); go(page); };
+  });
 }
 document.querySelectorAll(".side-nav a").forEach((a) => a.addEventListener("click", () => go(a.dataset.page)));
 window.addEventListener("hashchange", () => session && go(location.hash.slice(1).split("?")[0]));
@@ -1000,8 +1021,8 @@ pages.provider = async () => {
   const [reg, gws, known] = await Promise.all([api("GET", "/api/registry"), api("GET", "/api/gateways"), api("GET", "/api/groups")]);
   const p = reg.items.find((x) => x.id === pid);
   if (!p) {
-    $("#page").innerHTML = `<div class="card">${emptyState("plugs", "Backend not found", "It may have been deleted. Open the registry to see what is registered.")}
-      <div style="text-align:center"><button class="btn" onclick="location.hash='registry'">Back to registry</button></div></div>`;
+    $("#page-title").textContent = "Not found"; crumbs({ page: "registry", label: "MCP Registry" }, { page: "provider", label: "Not found" }); pageActions("");
+    $("#page").innerHTML = notFoundPage("Backend", "#registry", "All backends");
     return;
   }
   const d = await api("GET", `/api/registry/${pid}/tools`);
@@ -1097,11 +1118,11 @@ pages.gateway = async () => {
   let ep;  // { id, name, url, backends: [provider], prefixed, standalone, editable, description }
   if (sid !== null) {
     const p = reg.items.find((x) => x.id === sid);
-    if (!p || !p.standalone) { $("#page").innerHTML = `<div class="card">${emptyState("rocket", "Not deployed", "This backend is not served as its own MCP server.")}<div style="text-align:center"><button class="btn" onclick="location.hash='servers'">MCP Servers</button></div></div>`; return; }
+    if (!p || !p.standalone) { $("#page-title").textContent = "Not found"; crumbs({ page: "servers", label: "MCP Servers" }, { page: "gateway", label: "Not found" }); pageActions(""); $("#page").innerHTML = notFoundPage("MCP server", "#servers", "All servers"); return; }
     ep = { id: p.id, name: p.name, url: p.standalone_url, backends: [p], prefixed: false, standalone: true, description: "This backend on its own address, tool names as the backend defines them." };
   } else if (gid) {
     const g = gws.items.find((x) => x.id === gid);
-    if (!g) { $("#page").innerHTML = `<div class="card">${emptyState("squares-four", "Gateway not found", "It may have been deleted.")}<div style="text-align:center"><button class="btn" onclick="location.hash='gateways'">All gateways</button></div></div>`; return; }
+    if (!g) { $("#page-title").textContent = "Not found"; crumbs({ page: "gateways", label: "MCP Gateways" }, { page: "gateway", label: "Not found" }); pageActions(""); $("#page").innerHTML = notFoundPage("Gateway", "#gateways", "All gateways"); return; }
     ep = { id: g.id, name: g.name, url: g.url, backends: g.backends.map((b) => reg.items.find((x) => x.id === b.id)).filter(Boolean), prefixed: true, editable: true, description: g.description || "Named gateway: a chosen set of backends, tool names prefixed by backend id.", raw: g };
   } else {
     ep = { id: "", name: "Everything", url: SERVER.public_mcp_url || location.origin + "/mcp", backends: servable.filter((p) => p.status === "published"), prefixed: true, description: "The shared endpoint: every published backend the caller is entitled to, tool names prefixed by backend id." };

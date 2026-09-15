@@ -243,3 +243,33 @@ async def test_backends_follow_the_public_endpoint(admin):
     await admin.put("/api/security", json={"public_mcp_url": ""})
     p = next(x for x in (await admin.get("/api/registry")).json()["items"] if x["id"] == pid)
     assert p["mcp_url"] == "http://portal.test/mcp", "blank means the portal's own address"
+
+
+async def test_error_pages_speak_html_to_browsers_and_json_to_everyone_else(portal, admin):
+    html = await portal.get("/no-such-page", headers={"Accept": "text/html,application/xhtml+xml"})
+    assert html.status_code == 404 and "text/html" in html.headers["content-type"]
+    assert "Page not found" in html.text and "/no-such-page" in html.text and 'href="/"' in html.text
+    api = await admin.get("/api/no-such-thing", headers={"Accept": "text/html"})
+    assert api.status_code == 404 and api.headers["content-type"].startswith("application/json"), "API paths never get a page"
+    script = await portal.get("/no-such-page")
+    assert script.status_code == 404 and script.headers["content-type"].startswith("application/json")
+
+
+async def test_gateway_404_page_for_browsers(admin):
+    from portal.app import create_app
+    from bizplay_mcp.registry_gateway import build_registry_gateway
+    import asyncio, uvicorn
+    server = uvicorn.Server(uvicorn.Config(create_app(build_registry_gateway()), host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.05)
+    base = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+    try:
+        async with httpx.AsyncClient() as c:
+            page = await c.get(f"{base}/mcp/nope", headers={"Accept": "text/html"})
+            assert page.status_code == 404 and "No MCP server here" in page.text and "/mcp/nope" in page.text
+            agent = await c.post(f"{base}/mcp/nope", json={}, headers={"Accept": "application/json, text/event-stream"})
+            assert agent.status_code == 404 and agent.json()["error"].startswith("Nothing is served")
+    finally:
+        server.should_exit = True
+        await task

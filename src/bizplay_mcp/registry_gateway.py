@@ -375,10 +375,18 @@ class RegistryASGI:
                 elif g:
                     extra = {"gateway_providers": list(g.get("providers") or [])}
                 else:
-                    body = json.dumps({"error": f"Nothing is served at /mcp/{key}. It is neither a deployed MCP server "
-                                                "nor a named gateway; use /mcp for everything."}).encode()
+                    message = (f"Nothing is served at /mcp/{key}. It is neither a deployed MCP server "
+                               "nor a named gateway; use /mcp for everything.")
+                    accept = dict(scope.get("headers") or {}).get(b"accept", b"").decode(errors="ignore")
+                    if "text/html" in accept:
+                        from portal.app import error_html  # browsers get the portal's page, agents get JSON
+                        body = error_html(404, "No MCP server here", message, path).encode()
+                        ctype = b"text/html; charset=utf-8"
+                    else:
+                        body = json.dumps({"error": message}).encode()
+                        ctype = b"application/json"
                     await send({"type": "http.response.start", "status": 404,
-                                "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+                                "headers": [(b"content-type", ctype), (b"content-length", str(len(body)).encode())]})
                     await send({"type": "http.response.body", "body": body})
                     return
                 scope = {**scope, "path": "/mcp", "raw_path": b"/mcp", "state": {**(scope.get("state") or {}), **extra}}
