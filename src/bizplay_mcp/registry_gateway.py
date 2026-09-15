@@ -218,9 +218,13 @@ class GovernanceMiddleware(Middleware):
         token_scope = oauth.upstream_token.set(user_token)
         try:
             result = await call_next(context)
-        except Exception as exc:
+        except ToolError as exc:
             audit.record(principal.user_id, name, arguments, "error", str(exc)[:200], via=via)
             raise
+        except Exception as exc:
+            # A backend that is down or misbehaving must read as that, not as a gateway fault.
+            audit.record(principal.user_id, name, arguments, "error", f"{type(exc).__name__}: {exc}"[:200], via=via)
+            raise ToolError(f"{provider['name']} did not answer: {type(exc).__name__}: {str(exc)[:160]}") from exc
         finally:
             oauth.upstream_token.reset(token_scope)
 

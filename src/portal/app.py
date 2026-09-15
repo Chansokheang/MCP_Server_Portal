@@ -699,9 +699,10 @@ async def refresh_tools(request: Request):
 
 
 # --- named gateways: a chosen set of backends on their own URL ---------------------
-def _public_gateway(state: dict, g: dict) -> dict:
+def _public_gateway(state: dict, g: dict, request: Request) -> dict:
     providers = [state["providers"][pid] for pid in g.get("providers", []) if pid in state["providers"]]
-    return {**g, "url": policy_store.gateway_url(state, g),
+    # Same base as the register prefill: the public endpoint if set, else the address the browser used.
+    return {**g, "url": _default_endpoint(state, request).rstrip("/") + "/" + g["id"],
             "backends": [{"id": p["id"], "name": p["name"], "status": p.get("status"),
                           "tools_enabled": sum(t["enabled"] for t in p["tools"].values())} for p in providers],
             "tools_enabled": sum(t["enabled"] for p in providers if p.get("status") == "published" for t in p["tools"].values())}
@@ -720,7 +721,7 @@ def _gateway_providers(state: dict, value) -> list[str]:
 
 async def list_gateways(request: Request):
     state = policy_store.load()
-    return JSONResponse({"items": [_public_gateway(state, g) for g in state["gateways"].values()]})
+    return JSONResponse({"items": [_public_gateway(state, g, request) for g in state["gateways"].values()]})
 
 
 async def create_gateway(request: Request):
@@ -736,7 +737,7 @@ async def create_gateway(request: Request):
          "description": (body.get("description") or "").strip(), "owner": request.state.user, "created_at": _now_iso()}
     state["gateways"][gid] = g
     policy_store.save(state)
-    return JSONResponse(_public_gateway(state, g), status_code=201)
+    return JSONResponse(_public_gateway(state, g, request), status_code=201)
 
 
 async def update_gateway(request: Request):
@@ -752,7 +753,7 @@ async def update_gateway(request: Request):
     if "providers" in body:
         g["providers"] = _gateway_providers(state, body["providers"])
     policy_store.save(state)
-    return JSONResponse(_public_gateway(state, g))
+    return JSONResponse(_public_gateway(state, g, request))
 
 
 async def delete_gateway(request: Request):
