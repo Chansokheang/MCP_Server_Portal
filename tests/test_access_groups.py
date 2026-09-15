@@ -97,3 +97,21 @@ async def test_entitlement_validation(admin, three_services):
     assert bad.status_code == 400
     bad = await admin.patch(f"/api/registry/{three_services['HR']}", json={"access": {"mode": "vip"}})
     assert bad.status_code == 400
+
+
+async def test_tool_level_groups_narrow_the_backend_entitlement(admin, three_services, as_groups):
+    """Everyone may use Public, but its ping is for hr only."""
+    r = await admin.put(f"/api/registry/{three_services['Public']}/tools/ping", json={"groups": "hr"})
+    assert r.status_code == 200 and r.json()["groups"] == ["hr"]
+    as_groups("finance")
+    async with Client(gateway()) as c:
+        assert "public_ping" not in await visible(c)
+        with pytest.raises(ToolError, match="'ping' is limited to access group"):
+            await c.call_tool("public_ping", {})
+    as_groups("hr")
+    async with Client(gateway()) as c:
+        assert "public_ping" in await visible(c)
+    await admin.put(f"/api/registry/{three_services['Public']}/tools/ping", json={"groups": ""})
+    as_groups("finance")
+    async with Client(gateway()) as c:
+        assert "public_ping" in await visible(c), "blank inherits the backend entitlement again"

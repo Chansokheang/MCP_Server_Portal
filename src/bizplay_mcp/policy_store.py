@@ -271,6 +271,10 @@ def check_tool_access(state: dict, provider_id: str, tool: str, role: str, claim
         return False, f"tool '{tool}' is disabled by the provider admin"
     if role not in policy["roles"]:
         return False, f"role '{role}' is not allowed to call '{tool}'"
+    # A tool may be narrower than its backend: listed groups only. Blank inherits the backend's entitlement.
+    tool_groups = set(policy.get("groups") or [])
+    if tool_groups and claims is not None and not tool_groups & set(claims.get("groups") or []):
+        return False, f"'{tool}' is limited to access group(s) {', '.join(sorted(tool_groups))}"
     return True, ""
 
 
