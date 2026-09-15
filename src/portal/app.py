@@ -662,9 +662,19 @@ async def oauth_callback(request: Request):
     except (oauth.OAuthError, httpx.HTTPError) as exc:
         policy_store.save(state)
         return RedirectResponse(f"/#registry?oauth_error={str(exc)[:160]}", status_code=303)
+    # First linked account on an MCP backend: load its tool list right away, so the
+    # page the user lands on already shows the tools instead of asking for a refresh.
+    loaded = ""
+    if provider.get("kind") == "mcp" and not provider.get("tools"):
+        try:
+            fresh = await _tools_from_mcp_server(provider["base_url"], _backend_headers(state, provider, pending["user_id"]))
+            _merge_tools(provider, fresh)
+            loaded = f"&tools={len(fresh)}"
+        except ApiError:
+            pass  # the page offers Refresh tools; the link itself succeeded
     policy_store.save(state)
     audit.record(pending["user_id"], f"oauth:{provider['id']}", {}, "ok", "account linked", via="portal")
-    return RedirectResponse(f"/#provider?p={provider['id']}&connected={pending['user_id']}", status_code=303)
+    return RedirectResponse(f"/#provider?p={provider['id']}&connected={pending['user_id']}{loaded}", status_code=303)
 
 
 async def list_connections(request: Request):

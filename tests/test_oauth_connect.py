@@ -120,7 +120,7 @@ async def link(admin, auth_server, pid, user):
     assert start["authorization_url"].startswith(f"{AS}/authorize?") and "code_challenge=" in start["authorization_url"]
     code, nonce = auth_server.issue_code(start["authorization_url"], user)
     r = await admin.get("/oauth/callback", params={"code": code, "state": nonce}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == f"/#provider?p={pid}&connected={user}", r.headers.get("location")
+    assert r.status_code == 303 and r.headers["location"].startswith(f"/#provider?p={pid}&connected={user}"), r.headers.get("location")
 
 
 @pytest.fixture
@@ -231,8 +231,10 @@ async def test_mcp_backend_in_oauth_mode(admin, auth_server, as_user, monkeypatc
     await admin.post(f"/api/registry/{pid}/oauth/discover", json={"url": AS})
     await admin.post(f"/api/registry/{pid}/publish")
     await link(admin, auth_server, pid, "emp001")
+    listed = next(p for p in (await admin.get("/api/registry")).json()["items"] if p["id"] == pid)
+    assert listed["tool_count"] == 1 and seen[-1]["Authorization"] == "Bearer at:emp001:1", "linking loads the tool list at once"
     refreshed = (await admin.post(f"/api/registry/{pid}/refresh-tools", json={"user_id": "emp001"})).json()
-    assert refreshed["tool_count"] == 1 and seen[-1]["Authorization"] == "Bearer at:emp001:1"
+    assert refreshed["tool_count"] == 1
 
     gateway_headers: list[dict] = []
 
