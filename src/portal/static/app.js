@@ -253,11 +253,11 @@ const fmtDay = (iso) => { const [y, m, d] = iso.split("-"); return `${Number(m)}
 const niceMax = (n) => { if (n <= 5) return 5; const p = Math.pow(10, Math.floor(Math.log10(n))); const u = n / p; return (u <= 1 ? 1 : u <= 2 ? 2 : u <= 5 ? 5 : 10) * p; };
 
 /** Stacked columns: one per day, ok / denied / error, 2px surface gaps, rounded top segment, hover tooltip. */
-function callsByDayChart(rows) {
-  const W = 640, H = 220, padL = 36, padR = 8, padT = 12, padB = 26;
+function callsByDayChart(rows, W = 1000) {
+  const H = 180, padL = 36, padR = 8, padT = 10, padB = 24;
   const innerW = W - padL - padR, innerH = H - padT - padB;
   const max = niceMax(Math.max(1, ...rows.map((r) => r.ok + r.denied + r.error)));
-  const slot = innerW / rows.length, bw = Math.min(24, slot * 0.6);
+  const slot = innerW / rows.length, bw = Math.min(22, slot * 0.5);
   const y = (v) => padT + innerH - (v / max) * innerH;
   const ticks = [0, max / 2, max];
   const cols = rows.map((r, i) => {
@@ -276,18 +276,18 @@ function callsByDayChart(rows) {
     return `<g class="col" data-tip="${esc(tip)}"><rect x="${padL + i * slot}" y="${padT}" width="${slot}" height="${innerH}" fill="transparent"></rect>${segs}</g>`;
   }).join("");
   const labels = rows.map((r, i) => (rows.length <= 14 || i % 2 === 0) ? `<text x="${padL + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle" class="ax">${fmtDay(r.date)}</text>` : "").join("");
-  return `<svg class="viz" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gateway calls per day">
+  return `<svg class="viz" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gateway calls per day">
     ${ticks.map((t) => `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" class="grid"></line><text x="${padL - 6}" y="${y(t) + 4}" text-anchor="end" class="ax">${t}</text>`).join("")}
     ${cols}${labels}</svg>`;
 }
 
 /** Horizontal bars, one series, value at the tip; denied/error share shown in the tooltip. */
-function callsByBackendChart(rows) {
-  const W = 640, rowH = 30, padL = 8, padR = 56, labelW = 170;
+function callsByBackendChart(rows, W = 640) {
+  const rowH = 26, padL = 8, padR = 56, labelW = Math.min(170, W * 0.3);
   const H = Math.max(60, rows.length * rowH + 8);
   const max = Math.max(1, ...rows.map((r) => r.calls));
   const innerW = W - padL - padR - labelW;
-  return `<svg class="viz" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gateway calls by backend">
+  return `<svg class="viz" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gateway calls by backend">
     ${rows.map((r, i) => {
       const yy = 4 + i * rowH, w = Math.max(2, (r.calls / max) * innerW);
       const tip = `${r.backend} · ${r.calls} call${r.calls === 1 ? "" : "s"}${r.denied || r.error ? ` · denied ${r.denied}, error ${r.error}` : ""}${r.folded ? ` · ${r.folded} backends folded` : ""}`;
@@ -300,12 +300,12 @@ function callsByBackendChart(rows) {
 }
 
 /** Part-to-whole per backend: enabled tools on a track of the total, "enabled / total" at the tip. */
-function toolsByBackendChart(rows) {
-  const W = 640, rowH = 30, padL = 8, padR = 74, labelW = 170;
+function toolsByBackendChart(rows, W = 640) {
+  const rowH = 26, padL = 8, padR = 74, labelW = Math.min(170, W * 0.3);
   const H = Math.max(60, rows.length * rowH + 8);
   const max = Math.max(1, ...rows.map((r) => r.total));
   const innerW = W - padL - padR - labelW;
-  return `<svg class="viz" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tools enabled per backend">
+  return `<svg class="viz" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tools enabled per backend">
     ${rows.map((r, i) => {
       const yy = 4 + i * rowH, wt = Math.max(2, (r.total / max) * innerW), we = (r.enabled / max) * innerW;
       const tip = `${r.backend} · ${r.enabled} of ${r.total} tools enabled${r.published ? "" : " · not published"}`;
@@ -356,20 +356,31 @@ pages.overview = async () => {
     </div>
     <div class="card chart-card">
       <div class="section-head"><h2 class="section-title">Gateway calls per day</h2><a class="btn small link" href="#audit">Audit log</a></div>
-      ${u.total ? callsByDayChart(byDay) + legend([[VIZ.ok, "ok"], [VIZ.denied, "denied"], [VIZ.error, "error"]]) : emptyState("chart-bar", "No calls yet", `Ask an agent something that uses a gateway tool and the last ${u.days} days fill in here.`)}
+      ${u.total ? `<div class="viz-slot" data-chart="day"></div>` + legend([[VIZ.ok, "ok"], [VIZ.denied, "denied"], [VIZ.error, "error"]]) : emptyState("chart-bar", "No calls yet", `Ask an agent something that uses a gateway tool and the last ${u.days} days fill in here.`)}
       ${u.total ? tableView(["Day", "ok", "denied", "error"], byDay.filter((r) => r.ok + r.denied + r.error).map((r) => [r.date, r.ok, r.denied, r.error])) : ""}
     </div>
     <div class="two">
       <div class="card chart-card">
         <div class="section-head"><h2 class="section-title">Calls by backend</h2><span class="muted small">last ${u.days} days</span></div>
-        ${byBackend.length ? callsByBackendChart(byBackend) + tableView(["Backend", "calls", "denied", "error"], byBackend.map((r) => [r.backend, r.calls, r.denied, r.error])) : emptyState("plugs-connected", "No backend called yet", "Traffic per backend appears here.")}
+        ${byBackend.length ? `<div class="viz-slot" data-chart="backend"></div>` + tableView(["Backend", "calls", "denied", "error"], byBackend.map((r) => [r.backend, r.calls, r.denied, r.error])) : emptyState("plugs-connected", "No backend called yet", "Traffic per backend appears here.")}
       </div>
       <div class="card chart-card">
         <div class="section-head"><h2 class="section-title">Tools enabled per backend</h2><a class="btn small link" href="#registry">Registry</a></div>
-        ${tools.length ? toolsByBackendChart(tools) + legend([[VIZ.series, "enabled"], [VIZ.track, "registered but off"]]) + tableView(["Backend", "enabled", "total"], tools.map((r) => [r.backend, r.enabled, r.total])) : emptyState("plug", "No backends", "Register one in the MCP Registry.")}
+        ${tools.length ? `<div class="viz-slot" data-chart="tools"></div>` + legend([[VIZ.series, "enabled"], [VIZ.track, "registered but off"]]) + tableView(["Backend", "enabled", "total"], tools.map((r) => [r.backend, r.enabled, r.total])) : emptyState("plug", "No backends", "Register one in the MCP Registry.")}
       </div>
     </div>`;
-  bindChartTips($("#page"));
+  const draw = () => {
+    $("#page").querySelectorAll(".viz-slot").forEach((slot) => {
+      const w = Math.max(320, Math.floor(slot.clientWidth));
+      slot.innerHTML = slot.dataset.chart === "day" ? callsByDayChart(byDay, w)
+        : slot.dataset.chart === "backend" ? callsByBackendChart(byBackend, w) : toolsByBackendChart(tools, w);
+    });
+    bindChartTips($("#page"));
+  };
+  draw();
+  // Redraw at the new width when the window changes size, without re-fetching.
+  clearTimeout(pages.overview._rs);
+  window.onresize = () => { clearTimeout(pages.overview._rs); pages.overview._rs = setTimeout(() => { if (location.hash.startsWith("#overview") || !location.hash) draw(); }, 150); };
 };
 
 // ---- Registry ----
