@@ -153,8 +153,11 @@ async def _token_request(cfg: dict, data: dict) -> dict:
         payload["client_secret"] = cfg["client_secret"]
     if cfg.get("resource"):
         payload["resource"] = cfg["resource"]
-    async with _client() as c:
-        r = await c.post(cfg["token_url"], data=payload, headers={"Accept": "application/json"})
+    try:
+        async with _client() as c:
+            r = await c.post(cfg["token_url"], data=payload, headers={"Accept": "application/json"})
+    except httpx.HTTPError as exc:
+        raise OAuthError(f"auth server unreachable at {cfg['token_url']}: {type(exc).__name__}") from exc
     if r.status_code != 200:
         raise OAuthError(f"token endpoint answered HTTP {r.status_code}: {r.text[:160]}")
     doc = r.json()

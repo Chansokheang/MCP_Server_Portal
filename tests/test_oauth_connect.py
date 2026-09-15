@@ -250,3 +250,18 @@ async def test_mcp_backend_in_oauth_mode(admin, auth_server, as_user, monkeypatc
     async with Client(gateway(factory)) as c:
         with pytest.raises(ToolError, match="Account not connected"):
             await c.call_tool("tasks_list_tasks", {})
+
+
+async def test_auth_server_down_during_refresh_reads_as_that(admin, auth_server, items_api, as_user, monkeypatch):
+    await link(admin, auth_server, items_api, "emp001")
+    state = policy_store.load()
+    state["user_connections"]["emp001"][items_api]["expires_at"] = time.time() - 1
+    policy_store.save(state)
+
+    def dead(request):
+        raise httpx.ConnectError("connection refused", request=request)
+    monkeypatch.setattr(oauth, "http_client_factory", lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(dead), **kw))
+    as_user("emp001")
+    async with Client(gateway()) as c:
+        with pytest.raises(ToolError, match="auth server unreachable"):
+            await c.call_tool("items_api_listItems", {})
