@@ -49,6 +49,8 @@ def tools_from_spec(spec: dict) -> dict[str, dict]:
             "kind": kind, "enabled": kind == "read", "roles": ["employee", "manager"],
             "confirm": kind == "write", "summary": route.summary or "",
             "route": f"{route.method.upper()} {route.path}", "operation_id": route.operation_id or "",
+            # What the model sees unless the portal overrides it (tool row "description").
+            "generated": (tool.description or "").strip(),
         }
     return tools
 
@@ -92,5 +94,6 @@ def tools_from_mcp(listed: list[Any]) -> dict[str, dict]:
             "kind": kind, "enabled": kind == "read", "roles": ["employee", "manager"],
             "confirm": kind == "write", "summary": (tool.description or "").strip().split("\n")[0][:160],
             "route": "MCP tool", "operation_id": tool.name,
+            "generated": (tool.description or "").strip(),
         }
     return tools

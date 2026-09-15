@@ -115,3 +115,17 @@ async def test_tool_level_groups_narrow_the_backend_entitlement(admin, three_ser
     as_groups("finance")
     async with Client(gateway()) as c:
         assert "public_ping" in await visible(c), "blank inherits the backend entitlement again"
+
+
+async def test_portal_description_replaces_the_generated_one(admin, three_services, as_groups):
+    as_groups("finance,hr")
+    rows = {r["name"]: r for r in (await admin.get(f"/api/registry/{three_services['Public']}/tools")).json()["items"]}
+    assert rows["ping"]["generated"], "the spec's text is kept so the portal can show it"
+    async with Client(gateway()) as c:
+        before = next(t for t in await c.list_tools() if t.name == "public_ping").description
+    r = await admin.put(f"/api/registry/{three_services['Public']}/tools/ping",
+                        json={"description": "  Health check of the Public service.\nReturns ok:true.  "})
+    assert r.json()["description"] == "Health check of the Public service. Returns ok:true."
+    async with Client(gateway()) as c:
+        after = next(t for t in await c.list_tools() if t.name == "public_ping").description
+    assert after == "Health check of the Public service. Returns ok:true." and after != before

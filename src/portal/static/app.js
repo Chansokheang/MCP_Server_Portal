@@ -653,14 +653,15 @@ pages.access = async () => {
       <h2 class="section-title">Tool policy</h2>
       <div class="table-card"><div class="table-wrap"><table><tr><th>Tool</th><th>Kind</th><th>Enabled</th><th>Allowed roles</th><th>Only these groups</th><th>Confirm before call</th></tr>
       ${d.items.map((t) => `<tr data-name="${esc(t.name)}">
-        <td class="tool"><span class="mono">${esc(t.name)}</span>${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}${t.route ? `<div class="muted small mono">${esc(t.route)}</div>` : ""}</td>
+        <td class="tool"><span class="mono">${esc(t.name)}</span>${t.route ? `<div class="muted small mono">${esc(t.route)}</div>` : ""}
+          <input data-k="description" class="desc" value="${esc(t.description || "")}" placeholder="${esc(t.generated || t.summary || "Describe what this tool does, for the model")}" aria-label="Description the model sees" title="What the model reads when choosing a tool. Blank keeps the text from the spec or server: ${esc(t.generated || t.summary || "(none)")}"></td>
         <td>${t.kind === "write" ? chip("amber", "write", "pencil-simple") : chip("lilac", "read", "eye")}</td>
         <td><input type="checkbox" class="switch" data-k="enabled" ${t.enabled ? "checked" : ""} aria-label="Enabled"></td>
         <td class="nowrap">${d.roles.map((r) => `<label class="check"><input type="checkbox" data-k="role" value="${r}" ${t.roles.includes(r) ? "checked" : ""}>${r}</label>`).join(" ")}</td>
         <td><input data-k="groups" value="${esc((t.groups || []).join(", "))}" placeholder="inherit from backend" list="acc-known" aria-label="Only these groups" style="min-width:150px"></td>
         <td><input type="checkbox" class="switch" data-k="confirm" ${t.confirm ? "checked" : ""} ${t.kind === "read" ? "disabled" : ""} aria-label="Confirm before call"></td>
       </tr>`).join("")}</table></div></div>
-      <p class="muted small" style="margin-top:8px">A tool with groups listed is shown only to callers in one of them, on top of the backend entitlement above. Blank means every entitled caller.</p>
+      <p class="muted small" style="margin-top:8px">The description field is what the model reads when it chooses a tool; the placeholder shows what the spec or server provides today. Write it for a reader who has never seen the API: what it returns, and where its ids come from. A tool with groups listed is shown only to callers in one of them; blank means every entitled caller.</p>
     </div>
     <div class="callout"><i class="ph ph-shield-check"></i><span>Changes apply to the gateway on the next call. The gateway also checks that the role inside the agent token matches the provider's own record and limits results to the caller's company.</span></div>`;
 
@@ -682,6 +683,7 @@ pages.access = async () => {
       confirm: tr.querySelector('[data-k=confirm]').checked,
       roles: [...tr.querySelectorAll('[data-k=role]:checked')].map((x) => x.value),
       groups: tr.querySelector('[data-k=groups]').value,
+      description: tr.querySelector('[data-k=description]').value,
     };
     try { await api("PUT", `/api/registry/${pid}/tools/${name}`, body); toast("Policy saved", name); }
     catch (err) { toast("Save failed", err.message, 4500); }

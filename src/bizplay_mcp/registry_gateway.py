@@ -135,6 +135,9 @@ class GovernanceMiddleware(Middleware):
             policy = state["providers"][parts[0]]["tools"][parts[1]]
             if policy["kind"] == "read" and tool.annotations is None:
                 update["annotations"] = ToolAnnotations(read_only_hint=True)
+            # A description written in the portal replaces whatever the spec or server said.
+            if policy.get("description"):
+                update["description"] = policy["description"]
             visible.append(tool.model_copy(update=update) if update else tool)
         return visible
 

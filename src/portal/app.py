@@ -722,6 +722,8 @@ async def update_tool(request: Request):
         tool["roles"] = roles
     if "groups" in body:
         tool["groups"] = _listed(body["groups"])
+    if "description" in body:
+        tool["description"] = " ".join(str(body["description"]).split())[:600]
     policy_store.save(state)
     return JSONResponse({"name": name, **tool})
 
