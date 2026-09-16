@@ -1501,11 +1501,13 @@ pages.security = async () => {
   const d = await api("GET", "/api/security");
   const s = d.settings;
   const passed = d.checklist.filter((c) => c.ok).length, score = Math.round(100 * passed / d.checklist.length);
-  const tab = ["checklist", "settings", "credentials"].includes(hashParam("t")) ? hashParam("t") : "checklist";
+  const tab = ["checklist", "settings", "credentials", "signins"].includes(hashParam("t")) ? hashParam("t") : "checklist";
+  const log = tab === "signins" ? await api("GET", "/api/auth-log") : { items: [], clients: [] };
   renderTabs([
     { key: "checklist", label: "Checklist", icon: "list-checks", count: `${passed}/${d.checklist.length}` },
     { key: "settings", label: "Defaults", icon: "sliders-horizontal" },
     { key: "credentials", label: "Upstream credentials", icon: "key", count: d.credentials.length },
+    { key: "signins", label: "Sign-in log", icon: "sign-in" },
   ], tab, (k) => { setHash("security", { t: k }); pages.security(); },
   { title: `Security score ${score}%`, sub: `${passed} of ${d.checklist.length} checks pass`, tone: score >= 70 ? "" : "warn" });
 
@@ -1548,6 +1550,20 @@ pages.security = async () => {
       </div>
       <p class="muted small">Changes save as you make them. Token requirement and who may use an endpoint are set per gateway on its own page; these are the portal-wide defaults.</p>`,
 
+    signins: `
+      <div class="callout"><i class="ph ph-sign-in"></i><span>Every step an MCP client takes at the gateway's sign-in endpoints (discovery, registration, the sign-in page, token exchange) and every call the gateway refused. When a connector says it could not reach the gateway, the last lines here say how far it got.</span></div>
+      <div class="section-head" style="margin-top:14px"><h2 class="section-title">Registered MCP clients</h2><span class="muted small">${log.clients.length} client(s)</span></div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Client</th><th>Client id</th><th>Sends users back to</th><th>Registered</th></tr>
+        ${log.clients.length ? log.clients.map((c) => `<tr><td><strong>${esc(c.client_name)}</strong>${c.cimd ? `<div class="sub">${esc("published identity (metadata document)")}</div>` : ""}</td><td class="mono small clip" title="${esc(c.client_id)}">${esc(c.client_id)}</td><td class="mono small">${esc((c.redirect_uris || []).join(", "))}</td><td class="small nowrap">${esc(fmtTs(c.client_id_issued_at))}</td></tr>`).join("")
+          : `<tr><td colspan="4">${emptyState("plugs", "No client has registered yet", "claude.ai and ChatGPT register themselves the first time someone adds a gateway that requires a token.")}</td></tr>`}
+      </table></div></div>
+      <div class="section-head" style="margin-top:18px"><h2 class="section-title">Recent steps</h2><span class="muted small">Newest first, ${log.items.length} line(s)</span></div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Time</th><th>Step</th><th>Status</th><th>Client</th><th>User</th><th>Detail</th><th>Path</th><th>Client software</th></tr>
+        ${log.items.length ? log.items.map((e) => `<tr><td class="small mono nowrap">${esc(fmtTs(e.ts))}</td><td>${chip("", e.kind)}</td><td>${e.status < 300 ? chip("green", String(e.status)) : e.status < 400 ? chip("", String(e.status)) : chip("red", String(e.status))}</td><td class="small">${esc(e.client || "")}</td><td class="mono small">${esc(e.user || "")}</td><td class="small">${esc(e.detail)}</td><td class="mono small">${esc(e.path)}</td><td class="small muted clip" title="${esc(e.agent)}">${esc((e.agent || "").slice(0, 40))}</td></tr>`).join("")
+          : `<tr><td colspan="8">${emptyState("sign-in", "Nothing yet", "Steps appear as soon as a client discovers the sign-in or the gateway refuses a call.")}</td></tr>`}
+      </table></div></div>`,
     credentials: `
       <div class="table-card"><div class="table-wrap"><table>
         <tr><th>Credential</th><th>Backend</th><th>Secret</th><th>Rotated</th><th></th></tr>

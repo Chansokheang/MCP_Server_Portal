@@ -473,6 +473,14 @@ class RegistryASGI:
                                 "headers": [(b"content-type", ctype), (b"content-length", str(len(body)).encode())]})
                     await send({"type": "http.response.body", "body": body})
                     return
+            if (path == "/mcp" or key) and scope.get("method") == "OPTIONS":
+                # A browser-based client's preflight: answer it, never demand a token for it.
+                await send({"type": "http.response.start", "status": 204, "headers": [
+                    (b"access-control-allow-origin", b"*"), (b"access-control-allow-methods", b"GET, POST, DELETE, OPTIONS"),
+                    (b"access-control-allow-headers", b"Authorization, Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id"),
+                    (b"access-control-expose-headers", b"Mcp-Session-Id, WWW-Authenticate"), (b"access-control-max-age", b"600")]})
+                await send({"type": "http.response.body", "body": b""})
+                return
             if path == "/mcp" or key:
                 # Who is calling: a portal-issued agent token, if one is presented.
                 auth_header = headers.get(b"authorization", b"").decode(errors="ignore")
@@ -483,13 +491,20 @@ class RegistryASGI:
                 # claude.ai, ChatGPT and other MCP clients find this gateway's own OAuth sign-in.
                 metadata = f"{self._origin(headers, state)}/.well-known/oauth-protected-resource/mcp" + (f"/{key}" if key else "")
                 challenge = (b"www-authenticate", f'Bearer realm="bizplay-gateway", resource_metadata="{metadata}"'.encode())
+                agent = headers.get(b"user-agent", b"").decode(errors="ignore")
                 if auth_header and record is None:
+                    policy_store.auth_log(state, "gateway", 401, f"{scheme or 'no scheme'} credential not a valid agent token", path=path, agent=agent)
+                    policy_store.save(state)
                     return await self._reply(send, 401, {"error": "invalid or expired agent token"}, [challenge])
                 if policy["require_token"] and record is None:
+                    policy_store.auth_log(state, "gateway", 401, "no token; challenge sent (a sign-in should follow)", path=path, agent=agent)
+                    policy_store.save(state)
                     return await self._reply(send, 401, {"error": "this gateway requires an agent token; issue one in the Bizplay MCP portal"}, [challenge])
                 claims = claims_for(record) if record else None
                 ok, reason = policy_store.check_endpoint_access(policy, claims)
                 if not ok:
+                    policy_store.auth_log(state, "gateway", 403, reason, path=path, user=record["sub"] if record else "", agent=agent)
+                    policy_store.save(state)
                     return await self._reply(send, 403, {"error": reason})
                 if record:
                     touch_token(state, record)

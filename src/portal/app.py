@@ -1251,6 +1251,14 @@ async def revoke_token(request: Request):
 
 
 # --- security -------------------------------------------------------------------
+async def auth_log(request: Request):
+    """Newest first: what MCP clients did at the sign-in endpoints and why the gateway refused calls."""
+    state = policy_store.load()
+    items = list(reversed(state.get("auth_log", [])))
+    clients = [{k: v for k, v in c.items()} for c in state.get("oauth_clients", {}).values()]
+    return JSONResponse({"items": items, "clients": sorted(clients, key=lambda c: -c.get("client_id_issued_at", 0))})
+
+
 async def security(request: Request):
     state = policy_store.load()
     creds = [{**{k: v for k, v in c.items() if k != "cached"}, "secret": _mask(c["secret"]) if c["secret"] else "(not set)"}
@@ -1414,6 +1422,7 @@ app = Starlette(
         Route("/api/tokens", issue_token, methods=["POST"]),
         Route("/api/tokens/{tid}/revoke", revoke_token, methods=["POST"]),
         Route("/api/security", security),
+        Route("/api/auth-log", auth_log),
         Route("/api/security", update_security, methods=["PUT"]),
         Route("/api/credentials/{cid}/rotate", rotate_credential, methods=["POST"]),
         Route("/api/audit", audit_log),

@@ -109,6 +109,9 @@ def _seed_state() -> dict:
         "gateways": {},
         "oauth_clients": {},
         "auth_codes": {},
+        # What MCP clients did at the sign-in endpoints and why the gateway refused them: the first
+        # place to look when a connector says it "could not reach" the gateway. Newest last, capped.
+        "auth_log": [],
         # Per-endpoint settings, keyed "" (shared /mcp), a gateway id, or a deployed backend id:
         # {"require_token": None | bool (None inherits security.require_gateway_bearer), "access": {...}}
         "endpoint_settings": {},
@@ -202,6 +205,7 @@ def load() -> dict:
         # MCP clients that registered themselves with the gateway's OAuth server, and codes in flight.
         state.setdefault("oauth_clients", {})
         state.setdefault("auth_codes", {})
+        state.setdefault("auth_log", [])
         for u in state["users"].values():
             # Earlier seeds stored a display name here; the gateway needs the corp number.
             if u.get("company") == "Bizplay Demo Co.":
@@ -225,6 +229,18 @@ def reset() -> dict:
 
 
 # --- agent tokens (what AI agents present to the gateway) ------------------
+AUTH_LOG_MAX = 300
+
+
+def auth_log(state: dict, kind: str, status: int, detail: str = "", *, path: str = "", client: str = "",
+             user: str = "", agent: str = "") -> None:
+    """Append one line to the sign-in log (the caller saves the state)."""
+    log = state.setdefault("auth_log", [])
+    log.append({"ts": time.time(), "kind": kind, "status": status, "detail": detail[:200], "path": path[:200],
+                "client": client[:80], "user": user[:80], "agent": agent[:120]})
+    del log[:-AUTH_LOG_MAX]
+
+
 def issue_agent_token(state: dict, *, label: str, user_id: str, role: str, company: str,
                       agent: str, ttl_days: int, created_by: str, groups: list[str] | None = None) -> tuple[str, dict]:
     token = "bz_" + secrets.token_urlsafe(32)

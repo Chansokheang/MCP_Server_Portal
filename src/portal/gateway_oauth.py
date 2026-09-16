@@ -27,11 +27,15 @@ import secrets
 import time
 from urllib.parse import urlencode, urlsplit
 
+import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from bizplay_mcp import audit, policy_store
+
+CIMD_TTL = 3600           # seconds a fetched client metadata document is trusted before re-reading it
+http_client_factory = httpx.AsyncClient  # tests swap this for an in-memory transport
 
 CODE_TTL = 600            # seconds an authorization code stays valid
 ACCESS_TTL = 3600         # seconds an access token lasts; the refresh token lasts security.token_ttl_days
@@ -56,9 +60,22 @@ def issuer(state: dict, request: Request) -> str:
     return request_origin(request)
 
 
+def _agent(request: Request) -> str:
+    return request.headers.get("user-agent", "")
+
+
+def _log(state: dict, request: Request, kind: str, status: int, detail: str = "", *, client: str = "", user: str = "", save: bool = True) -> None:
+    policy_store.auth_log(state, kind, status, detail, path=str(request.url.path), client=client, user=user, agent=_agent(request))
+    if save:
+        policy_store.save(state)
+
+
 def metadata_doc(iss: str) -> dict:
     return {
         "issuer": iss,
+        # Clients may identify themselves by a URL to their metadata document (CIMD), the way
+        # claude.ai's "published identity" does, instead of registering.
+        "client_id_metadata_document_supported": True,
         "authorization_endpoint": f"{iss}/authorize",
         "token_endpoint": f"{iss}/token",
         "registration_endpoint": f"{iss}/register",
@@ -80,7 +97,9 @@ async def preflight(request: Request) -> Response:
 
 
 async def as_metadata(request: Request) -> Response:
-    return _json(metadata_doc(issuer(policy_store.load(), request)))
+    state = policy_store.load()
+    _log(state, request, "discovery", 200, "authorization server metadata read")
+    return _json(metadata_doc(issuer(state, request)))
 
 
 async def resource_metadata(request: Request) -> Response:
@@ -88,7 +107,9 @@ async def resource_metadata(request: Request) -> Response:
     state = policy_store.load()
     key = (request.path_params.get("key") or "").strip("/")
     if key and key not in state["gateways"] and not (state["providers"].get(key, {}).get("standalone")):
+        _log(state, request, "discovery", 404, f"resource metadata asked for unknown /mcp/{key}")
         return _json({"error": f"nothing is served at /mcp/{key}"}, 404)
+    _log(state, request, "discovery", 200, f"resource metadata read for /mcp/{key}" if key else "resource metadata read for /mcp")
     iss = issuer(state, request)
     return _json({"resource": f"{iss}/mcp" + (f"/{key}" if key else ""), "authorization_servers": [iss],
                   "scopes_supported": [SCOPE], "bearer_methods_supported": ["header"],
@@ -104,14 +125,16 @@ def _valid_redirect(uri: str) -> bool:
 
 
 async def register(request: Request) -> Response:
+    state = policy_store.load()
     try:
         body = await request.json()
     except ValueError:
+        _log(state, request, "register", 400, "body was not JSON")
         return _json({"error": "invalid_client_metadata", "error_description": "JSON body expected"}, 400)
     uris = body.get("redirect_uris") or []
     if not isinstance(uris, list) or not uris or not all(isinstance(u, str) and _valid_redirect(u) for u in uris):
+        _log(state, request, "register", 400, f"bad redirect_uris: {uris!r}"[:200], client=str(body.get("client_name") or ""))
         return _json({"error": "invalid_redirect_uri", "error_description": "redirect_uris must be https URLs (or http://localhost)"}, 400)
-    state = policy_store.load()
     client = {
         "client_id": "mcpc_" + secrets.token_urlsafe(12),
         "client_name": " ".join(str(body.get("client_name") or "MCP client").split())[:80],
@@ -124,8 +147,36 @@ async def register(request: Request) -> Response:
         "client_id_issued_at": int(time.time()),
     }
     state.setdefault("oauth_clients", {})[client["client_id"]] = client
+    _log(state, request, "register", 201, f"client registered, redirects to {', '.join(uris)}", client=client["client_name"], save=False)
     policy_store.save(state)
     return _json(client, 201)
+
+
+async def lookup_client(state: dict, client_id: str) -> dict | None:
+    """A registered client, or one identified by the URL of its metadata document (CIMD), fetched and cached."""
+    client_id = (client_id or "").strip()
+    known = state.get("oauth_clients", {}).get(client_id)
+    if not client_id.startswith("https://"):
+        return known
+    if known and known.get("cimd") and time.time() - known.get("fetched_at", 0) < CIMD_TTL:
+        return known
+    try:
+        async with http_client_factory(timeout=8.0, follow_redirects=True) as http:
+            r = await http.get(client_id, headers={"Accept": "application/json"})
+        doc = r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        doc = None
+    if not isinstance(doc, dict) or doc.get("client_id") != client_id:
+        return known if known and known.get("cimd") else None  # a stale copy beats nothing
+    uris = doc.get("redirect_uris") or []
+    if not isinstance(uris, list) or not all(isinstance(u, str) and _valid_redirect(u) for u in uris) or not uris:
+        return None
+    client = {"client_id": client_id, "client_name": " ".join(str(doc.get("client_name") or urlsplit(client_id).netloc).split())[:80],
+              "redirect_uris": uris, "client_uri": str(doc.get("client_uri") or "")[:200], "token_endpoint_auth_method": "none",
+              "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "scope": SCOPE,
+              "cimd": True, "fetched_at": time.time(), "client_id_issued_at": int(known["client_id_issued_at"]) if known else int(time.time())}
+    state.setdefault("oauth_clients", {})[client_id] = client
+    return client
 
 
 # --- authorize: the portal's sign-in page ----------------------------------------------
@@ -170,12 +221,12 @@ def _resource_label(state: dict, resource: str) -> str:
 AUTH_PARAMS = ("response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource")
 
 
-def _authorize_request(state: dict, params) -> tuple[dict | None, dict, str | None]:
+async def _authorize_request(state: dict, params) -> tuple[dict | None, dict, str | None]:
     """Validate an authorization request. Returns (client, params, error) where error blocks any redirect."""
     q = {k: (params.get(k) or "").strip() for k in AUTH_PARAMS}
-    client = state.get("oauth_clients", {}).get(q["client_id"])
+    client = await lookup_client(state, q["client_id"])
     if not client:
-        return None, q, "Unknown client. The app that sent you here has not registered with this portal."
+        return None, q, "Unknown client. The app that sent you here has not registered with this portal, and its client id is not a readable metadata document."
     if not q["redirect_uri"]:
         q["redirect_uri"] = client["redirect_uris"][0] if len(client["redirect_uris"]) == 1 else ""
     if q["redirect_uri"] not in client["redirect_uris"]:
@@ -208,23 +259,29 @@ def _redirect_error(q: dict, error: str, description: str) -> Response:
 
 async def authorize_get(request: Request) -> Response:
     state = policy_store.load()
-    client, q, error = _authorize_request(state, request.query_params)
+    client, q, error = await _authorize_request(state, request.query_params)
     if error:
+        _log(state, request, "authorize", 400, error, client=q["client_id"][:80])
         return HTMLResponse(page("Cannot continue", f"<h1>Cannot continue</h1><p>{html.escape(error)}</p>"), status_code=400)
     if q["response_type"] != "code":
+        _log(state, request, "authorize", 303, f"unsupported response_type {q['response_type']!r}", client=client["client_name"])
         return _redirect_error(q, "unsupported_response_type", "only response_type=code is supported")
     if not q["code_challenge"] or q["code_challenge_method"] not in ("", "S256"):
+        _log(state, request, "authorize", 303, "PKCE S256 challenge missing", client=client["client_name"])
         return _redirect_error(q, "invalid_request", "PKCE with S256 is required")
+    _log(state, request, "authorize", 200, f"sign-in page shown for {q['resource'] or 'the gateway'}", client=client["client_name"])
     return HTMLResponse(_authorize_page(state, client, q))
 
 
 async def authorize_post(request: Request) -> Response:
     form = await request.form()
     state = policy_store.load()
-    client, q, error = _authorize_request(state, form)
+    client, q, error = await _authorize_request(state, form)
     if error:
+        _log(state, request, "authorize", 400, error, client=q["client_id"][:80])
         return HTMLResponse(page("Cannot continue", f"<h1>Cannot continue</h1><p>{html.escape(error)}</p>"), status_code=400)
     if form.get("decision") == "deny":
+        _log(state, request, "authorize", 303, "user cancelled", client=client["client_name"])
         return _redirect_error(q, "access_denied", "the user cancelled the sign-in")
     email, password = (form.get("email") or "").strip().lower(), form.get("password") or ""
     user = policy_store.user_by_email(state, email)
@@ -233,6 +290,7 @@ async def authorize_post(request: Request) -> Response:
             msg = "That is a portal admin account. Sign in with an employee account: agents act as a person with a role and company."
         else:
             msg = "Invalid email or password."
+        _log(state, request, "authorize", 401, msg, client=client["client_name"], user=email)
         return HTMLResponse(_authorize_page(state, client, q, msg, email), status_code=401)
     code = "ac_" + secrets.token_urlsafe(32)
     state.setdefault("auth_codes", {})[code] = {
@@ -244,6 +302,7 @@ async def authorize_post(request: Request) -> Response:
     for c, rec in list(state["auth_codes"].items()):
         if rec["expires_at"] < time.time():
             del state["auth_codes"][c]
+    _log(state, request, "authorize", 303, "signed in, code issued", client=client["client_name"], user=user["id"], save=False)
     policy_store.save(state)
     audit.record(user["id"], f"oauth:{client['client_name']}", {}, "ok", "signed in to an MCP client", via="portal")
     sep = "&" if "?" in q["redirect_uri"] else "?"
@@ -280,36 +339,42 @@ async def token(request: Request) -> Response:
     form = await request.form()
     grant = form.get("grant_type") or ""
     state = policy_store.load()
-    client = state.get("oauth_clients", {}).get((form.get("client_id") or "").strip())
+    client = await lookup_client(state, form.get("client_id") or "")
+    name = client["client_name"] if client else (form.get("client_id") or "")[:80]
+
+    def fail(status: int, error: str, description: str = "") -> Response:
+        _log(state, request, "token", status, f"{grant or 'no grant'}: {description or error}", client=name)
+        return _json({"error": error, **({"error_description": description} if description else {})}, status)
+
     if grant == "authorization_code":
         rec = state.get("auth_codes", {}).pop(form.get("code") or "", None)
         if not rec or rec["expires_at"] < time.time():
-            policy_store.save(state)
-            return _json({"error": "invalid_grant", "error_description": "unknown, used or expired code"}, 400)
+            return fail(400, "invalid_grant", "unknown, used or expired code")
         client = client or state["oauth_clients"].get(rec["client_id"])
         if not client or client["client_id"] != rec["client_id"]:
-            return _json({"error": "invalid_client"}, 401)
+            return fail(401, "invalid_client", "code was issued to a different client")
         if (form.get("redirect_uri") or rec["redirect_uri"]) != rec["redirect_uri"]:
-            return _json({"error": "invalid_grant", "error_description": "redirect_uri does not match"}, 400)
+            return fail(400, "invalid_grant", "redirect_uri does not match")
         if not _pkce_ok(form.get("code_verifier") or "", rec["code_challenge"]):
-            policy_store.save(state)
-            return _json({"error": "invalid_grant", "error_description": "PKCE verification failed"}, 400)
+            return fail(400, "invalid_grant", "PKCE verification failed")
         out = issue_tokens(state, client, rec["user_id"], rec["resource"], rec["scope"])
+        _log(state, request, "token", 200, "access and refresh tokens issued", client=client["client_name"], user=rec["user_id"], save=False)
         policy_store.save(state)
         return _json(out)
     if grant == "refresh_token":
         given = (form.get("refresh_token") or "").strip()
         old = next((t for t in state["agent_tokens"].values() if t.get("refresh_token") == given and not t["revoked"]), None)
         if not old or old.get("refresh_expires_at", 0) < time.time():
-            return _json({"error": "invalid_grant", "error_description": "unknown, revoked or expired refresh token"}, 400)
+            return fail(400, "invalid_grant", "unknown, revoked or expired refresh token")
         client = client or state["oauth_clients"].get(old.get("client_id"))
         if not client or client["client_id"] != old.get("client_id"):
-            return _json({"error": "invalid_client"}, 401)
+            return fail(401, "invalid_client", "refresh token belongs to a different client")
         old["revoked"] = True  # rotation: the old pair stops working the moment the new one exists
         out = issue_tokens(state, client, old["sub"], old.get("resource", ""))
+        _log(state, request, "token", 200, "tokens refreshed", client=client["client_name"], user=old["sub"], save=False)
         policy_store.save(state)
         return _json(out)
-    return _json({"error": "unsupported_grant_type"}, 400)
+    return fail(400, "unsupported_grant_type", f"grant_type {grant!r} is not supported")
 
 
 routes = [

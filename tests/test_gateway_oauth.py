@@ -19,6 +19,7 @@ from starlette.routing import Route
 
 from bizplay_mcp import policy_store
 from bizplay_mcp.registry_gateway import build_registry_gateway
+from portal import gateway_oauth
 from portal.app import app as portal_app, create_app
 
 api = Starlette(routes=[Route("/ping", lambda r: JSONResponse({"ok": True}))])
@@ -152,6 +153,54 @@ async def test_sign_in_flow_issues_a_token_bound_to_the_employee(admin, anon, se
     current = next(t for t in (await admin.get("/api/tokens")).json()["items"] if not t["revoked"] and t["sub"] == "emp001" and t["via"] == "oauth")
     assert (await admin.post(f"/api/tokens/{current['id']}/revoke")).status_code == 200
     assert (await anon.post("/token", data={"grant_type": "refresh_token", "refresh_token": new.json()["refresh_token"], "client_id": client["client_id"]})).status_code == 400
+
+
+async def test_client_identified_by_metadata_document(admin, anon, monkeypatch):
+    """claude.ai's 'published identity': the client id is the URL of a JSON document, no registration."""
+    CID = "https://claude.ai/.well-known/mcp-client.json"
+    doc = {"client_id": CID, "client_name": "Claude (published)", "redirect_uris": [REDIRECT], "token_endpoint_auth_method": "none"}
+    fetched = []
+
+    def handler(request):
+        fetched.append(str(request.url))
+        return httpx.Response(200, json=doc) if str(request.url) == CID else httpx.Response(404)
+    monkeypatch.setattr(gateway_oauth, "http_client_factory", lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(handler), **kw))
+    assert (await anon.get("/.well-known/oauth-authorization-server")).json()["client_id_metadata_document_supported"] is True
+
+    verifier, challenge = pkce()
+    q = {"response_type": "code", "client_id": CID, "redirect_uri": REDIRECT, "code_challenge": challenge, "code_challenge_method": "S256", "resource": "", "state": "s"}
+    r = await anon.get("/authorize", params=q)
+    assert r.status_code == 200 and "Claude (published)" in r.text
+    r = await anon.post("/authorize", data={**q, "decision": "allow", "email": "minji@bizplay.co.kr", "password": "minji1234"}, follow_redirects=False)
+    code = parse_qs(urlsplit(r.headers["location"]).query)["code"][0]
+    tok = await anon.post("/token", data={"grant_type": "authorization_code", "code": code, "client_id": CID, "redirect_uri": REDIRECT, "code_verifier": verifier})
+    assert tok.status_code == 200, tok.text
+    assert policy_store.find_agent_token(policy_store.load(), tok.json()["access_token"])["agent"] == "Claude (published)"
+    assert len(fetched) == 1, "the document is cached for a while"
+    # A document that does not vouch for the id is refused.
+    assert (await anon.get("/authorize", params={**q, "client_id": "https://claude.ai/other.json"})).status_code == 400
+
+    # The sign-in log tells the story, newest first, and lists the client.
+    log = (await admin.get("/api/auth-log")).json()
+    assert log["items"][0]["kind"] == "authorize" and log["items"][0]["status"] == 400, "the refused document, newest"
+    issued = next(e for e in log["items"] if e["kind"] == "token")
+    assert issued["status"] == 200 and issued["user"] == "emp001" and issued["client"] == "Claude (published)"
+    assert any(c["client_id"] == CID and c["cimd"] for c in log["clients"])
+
+
+async def test_gateway_logs_refusals_and_answers_preflight(admin, served):
+    pid = (await admin.post("/api/registry", json={"name": "Ping", "base_url": "http://x.test", "spec": SPEC, "auth_mode": "open"})).json()["id"]
+    await admin.post(f"/api/registry/{pid}/publish")
+    await admin.post("/api/gateways", json={"name": "Locked", "providers": [pid]})
+    await admin.put("/api/endpoints/locked/settings", json={"require_token": True, "access": {"mode": "everyone"}})
+    async with httpx.AsyncClient() as http:
+        r = await http.options(f"{served}/mcp/locked", headers={"Origin": "https://claude.ai"})
+        assert r.status_code == 204 and "authorization" in r.headers["access-control-allow-headers"].lower()
+        assert (await http.post(f"{served}/mcp/locked", json={}, headers={"User-Agent": "probe/1"})).status_code == 401
+        assert (await http.post(f"{served}/mcp/locked", json={}, headers={"Authorization": "Bearer nope"})).status_code == 401
+    items = (await admin.get("/api/auth-log")).json()["items"]
+    assert items[0]["kind"] == "gateway" and items[0]["status"] == 401 and "not a valid agent token" in items[0]["detail"]
+    assert items[1]["path"] == "/mcp/locked" and items[1]["agent"] == "probe/1" and "challenge sent" in items[1]["detail"]
 
 
 async def test_expired_access_token_is_refused_until_refreshed(admin, anon):

@@ -252,7 +252,12 @@ const I18N = (() => {
     "No credential is required because the agent-token requirement is switched off on the Security page.": "보안 페이지에서 에이전트 토큰 요구가 꺼져 있어 자격 증명이 필요 없습니다.",
   });
   Object.assign(dict, {
-    "What to prepare": "준비할 것", "Gateways this token opens": "이 토큰으로 열리는 게이트웨이", "Shared gateway": "공유 게이트웨이",
+    "What to prepare": "준비할 것", "Sign-in log": "로그인 로그", "Registered MCP clients": "등록된 MCP 클라이언트", "Recent steps": "최근 단계",
+    "Client": "클라이언트", "Client id": "클라이언트 ID", "Sends users back to": "사용자 복귀 주소", "Registered": "등록 시각", "Step": "단계", "Client software": "클라이언트 소프트웨어",
+    "No client has registered yet": "아직 등록된 클라이언트가 없습니다", "Nothing yet": "아직 없음",
+    "Every step an MCP client takes at the gateway's sign-in endpoints (discovery, registration, the sign-in page, token exchange) and every call the gateway refused. When a connector says it could not reach the gateway, the last lines here say how far it got.": "MCP 클라이언트가 게이트웨이 로그인 엔드포인트에서 거친 모든 단계(검색, 등록, 로그인 페이지, 토큰 교환)와 게이트웨이가 거부한 모든 호출입니다. 커넥터가 게이트웨이에 연결할 수 없다고 하면 여기 마지막 줄들이 어디까지 갔는지 알려줍니다.",
+    "claude.ai and ChatGPT register themselves the first time someone adds a gateway that requires a token.": "claude.ai와 ChatGPT는 토큰이 필요한 게이트웨이를 처음 추가할 때 스스로 등록합니다.",
+    "Steps appear as soon as a client discovers the sign-in or the gateway refuses a call.": "클라이언트가 로그인을 검색하거나 게이트웨이가 호출을 거부하면 단계가 표시됩니다.", "Gateways this token opens": "이 토큰으로 열리는 게이트웨이", "Shared gateway": "공유 게이트웨이",
     "No named gateway admits this person yet, so the shared endpoint is shown.": "아직 이 사람을 허용하는 이름 있는 게이트웨이가 없어 공유 엔드포인트를 표시합니다.", "Sign in when asked": "요청 시 로그인", "MCP clients sign in with OAuth 2.1": "MCP 클라이언트가 OAuth 2.1로 로그인",
     "This endpoint is public HTTPS and asks callers to sign in. Both products discover the gateway's own OAuth sign-in on their own: paste the URL, sign in with your employee account when the portal's page opens, and every call is made as you.": "이 엔드포인트는 공개 HTTPS이며 호출자에게 로그인을 요구합니다. 두 제품 모두 게이트웨이의 자체 OAuth 로그인을 스스로 찾습니다. URL을 붙여넣고, 포털 페이지가 열리면 직원 계정으로 로그인하세요. 이후 모든 호출은 본인으로 이루어집니다.",
     "Right after you add the connector, the portal's sign-in page opens. Use your employee email and password (members only, not the admin account). The connector then holds a token bound to you, renewed automatically and listed on the Agent Tokens page, where it can be revoked.": "커넥터를 추가하면 바로 포털 로그인 페이지가 열립니다. 직원 이메일과 비밀번호를 사용하세요(관리자 계정이 아닌 멤버만). 커넥터는 본인에게 묶인 토큰을 갖게 되며, 자동으로 갱신되고 에이전트 토큰 페이지에 표시되어 폐기할 수 있습니다.",
