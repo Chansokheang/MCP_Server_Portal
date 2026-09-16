@@ -107,6 +107,8 @@ def _seed_state() -> dict:
         "oauth_pending": {},
         # Named gateways: a chosen set of backends served on /mcp/<id>, prefixed like /mcp.
         "gateways": {},
+        "oauth_clients": {},
+        "auth_codes": {},
         # Per-endpoint settings, keyed "" (shared /mcp), a gateway id, or a deployed backend id:
         # {"require_token": None | bool (None inherits security.require_gateway_bearer), "access": {...}}
         "endpoint_settings": {},
@@ -197,6 +199,9 @@ def load() -> dict:
         state.setdefault("gateways", {})
         state.setdefault("endpoint_settings", {})
         state.setdefault("users", {u["id"]: dict(u) for u in DEMO_USERS})
+        # MCP clients that registered themselves with the gateway's OAuth server, and codes in flight.
+        state.setdefault("oauth_clients", {})
+        state.setdefault("auth_codes", {})
         for u in state["users"].values():
             # Earlier seeds stored a display name here; the gateway needs the corp number.
             if u.get("company") == "Bizplay Demo Co.":
@@ -257,7 +262,7 @@ def find_agent_token(state: dict, token: str) -> dict | None:
 
 
 def public_token(record: dict) -> dict:
-    return {k: v for k, v in record.items() if k != "token"}
+    return {k: v for k, v in record.items() if k not in ("token", "refresh_token")}
 
 
 # --- tool policy ----------------------------------------------------------

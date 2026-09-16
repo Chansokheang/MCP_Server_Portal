@@ -1100,7 +1100,7 @@ function clientGuides(p, tools, via) {
     },
     "chatgpt": (() => {
       const isHttps = url.startsWith("https://");
-      const ready = isHttps && !needsToken;
+      const ready = isHttps;
       const addSteps = [
         { t: "Copy this endpoint", b: codeBlock("g-url", url, via.standalone ? `This exact URL. It serves only ${esc(p.name)}, so the connector shows this one product, the way a vendor's own MCP app does.` : "This exact URL, including the /mcp path. The root path serves nothing and shows Not found.") },
         { t: "Add it in claude.ai", b: `<p>Settings, then Connectors, then Add custom connector. Paste the URL, give it a name, and click Add. It appears in the chat's tool menu.</p>` },
@@ -1109,29 +1109,27 @@ function clientGuides(p, tools, via) {
       ];
       if (ready) {
         return { label: "ChatGPT and Claude.ai", icon: "globe", ready: true,
-          lead: `This endpoint is public HTTPS and needs no sign-in, so both products can connect to it directly.`,
-          steps: addSteps };
+          lead: needsToken
+            ? `This endpoint is public HTTPS and asks callers to sign in. Both products discover the gateway's own OAuth sign-in on their own: paste the URL, sign in with your employee account when the portal's page opens, and every call is made as you.`
+            : `This endpoint is public HTTPS and needs no sign-in, so both products can connect to it directly.`,
+          steps: needsToken ? [addSteps[0], { t: "Sign in when asked", b: `<p>Right after you add the connector, the portal's sign-in page opens. Use your employee email and password (members only, not the admin account). The connector then holds a token bound to you, renewed automatically and listed on the Agent Tokens page, where it can be revoked.</p>` }, ...addSteps.slice(1)] : addSteps };
       }
       return {
         label: "ChatGPT and Claude.ai", icon: "globe", ready: false,
-        lead: isHttps
-          ? `The address is fine, but this gateway requires an agent token and these products have no field for one. Turn the requirement off on the Security page for a demo, or add OAuth.`
-          : `These products refuse plain HTTP. Give the gateway an HTTPS address first, then add it the same way.`,
+        lead: `These products refuse plain HTTP. Give the gateway an HTTPS address first, then add it the same way.`,
         steps: [
           ...(isHttps ? [] : [{ t: "Put HTTPS in front of it", b:
             `<p>Quickest for a demo, a Cloudflare quick tunnel on the server:</p>
              ${codeBlock("g-tunnel", `docker run -d --restart unless-stopped --name mcp-tunnel --network host \\\n  cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://localhost:${port}\n\ndocker logs mcp-tunnel 2>&1 | grep -o 'https://[a-z0-9-]*\\.trycloudflare\\.com'`,
              "The printed address plus /mcp is the connector URL. It changes every restart and is open to anyone who has it. For a stable URL, terminate TLS with nginx and proxy to this port, with proxy_buffering off.")}
              <p class="muted small" style="margin-top:8px">Then set that address here with Edit connection, so these instructions and any new tokens use it.</p>` }]),
-          ...(needsToken ? [{ t: "Allow connections without a token", b:
-            `<p>These products sign in with OAuth and cannot send a static token. For a demo, switch off the agent token requirement on the Security page and restart the gateways. For production, add an OAuth provider instead.</p>` }] : []),
           ...addSteps,
         ],
       };
     })(),
     "enterprise": {
       label: "Copilot Studio and Agentforce", icon: "buildings", ready: false,
-      lead: `Both support remote MCP servers and need the same public HTTPS address and OAuth login as the cloud chat products.`,
+      lead: `Both support remote MCP servers and use the same public HTTPS address and the gateway's own OAuth sign-in as the cloud chat products.`,
       steps: [
         { t: "Microsoft Copilot Studio", b: `<p>Add the gateway as a custom connector, point it at ${esc(url)} on its public address, then enable it as a tool for the agent.</p>` },
         { t: "Salesforce Agentforce", b: `<p>Register the endpoint in the Agentforce MCP registry, then grant the agent access to the tools you enabled for this API.</p>` },

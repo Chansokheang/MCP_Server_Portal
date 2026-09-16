@@ -432,6 +432,18 @@ class RegistryASGI:
         await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": raw})
 
+    @staticmethod
+    def _origin(headers: dict, state: dict) -> str:
+        """Where clients find this gateway's own sign-in: the public address if set, else the address they used."""
+        base = (state["security"].get("public_mcp_url") or "").strip()
+        if base:
+            from urllib.parse import urlsplit
+            parts = urlsplit(base)
+            return f"{parts.scheme}://{parts.netloc}"
+        proto = headers.get(b"x-forwarded-proto", b"http").decode(errors="ignore").split(",")[0].strip() or "http"
+        host = (headers.get(b"x-forwarded-host") or headers.get(b"host") or b"127.0.0.1").decode(errors="ignore").split(",")[0].strip()
+        return f"{proto}://{host}"
+
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "http":
             path = scope["path"]
@@ -467,7 +479,10 @@ class RegistryASGI:
                 scheme, _, token = auth_header.partition(" ")
                 record = policy_store.find_agent_token(state, token.strip()) if scheme.lower() == "bearer" and token.strip() else None
                 policy = policy_store.endpoint_policy(state, key)
-                challenge = (b"www-authenticate", f'Bearer realm="bizplay-gateway", resource="{path}"'.encode())
+                # The challenge points at the protected-resource document (RFC 9728), which is how
+                # claude.ai, ChatGPT and other MCP clients find this gateway's own OAuth sign-in.
+                metadata = f"{self._origin(headers, state)}/.well-known/oauth-protected-resource/mcp" + (f"/{key}" if key else "")
+                challenge = (b"www-authenticate", f'Bearer realm="bizplay-gateway", resource_metadata="{metadata}"'.encode())
                 if auth_header and record is None:
                     return await self._reply(send, 401, {"error": "invalid or expired agent token"}, [challenge])
                 if policy["require_token"] and record is None:

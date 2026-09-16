@@ -199,6 +199,26 @@ Members cannot reach the admin pages, and the API refuses them anything but
 their own tokens and connections. Users without a password are managed by an
 admin. Removing a user revokes their tokens and drops their linked accounts.
 
+### MCP clients sign in with OAuth (claude.ai, ChatGPT)
+
+claude.ai and ChatGPT connectors cannot send a static bearer header; they
+only know "no auth" or OAuth against the server itself. So the gateway is
+its own OAuth 2.1 authorization server, following the MCP authorization
+spec: a 401 from `/mcp/<gateway>` carries a `resource_metadata` link, the
+client reads `/.well-known/oauth-authorization-server`, registers itself at
+`/register` (RFC 7591), sends the person to `/authorize` (the portal's own
+sign-in page, employee accounts from the user directory), and trades the
+code at `/token` with PKCE. The access token it gets is an agent token bound
+to that person, so entitlement, tool policy, company scoping, per-user
+backend links and the audit log apply unchanged; it lasts an hour and is
+renewed with a refresh token that lasts the portal's token lifetime. These
+sessions appear on the Agent Tokens page and can be revoked there.
+
+In practice: turn on "Require token" on a gateway, paste its HTTPS URL into
+claude.ai as a custom connector, and sign in as `minji@bizplay.co.kr` when
+the portal's page opens. Admin accounts are refused there on purpose: an
+agent acts as a person with a role and a company.
+
 ### Login-endpoint backends (username and password)
 
 Many internal APIs have no OAuth server, just `POST /login` that returns a

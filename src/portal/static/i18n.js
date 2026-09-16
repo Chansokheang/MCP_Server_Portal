@@ -252,7 +252,11 @@ const I18N = (() => {
     "No credential is required because the agent-token requirement is switched off on the Security page.": "보안 페이지에서 에이전트 토큰 요구가 꺼져 있어 자격 증명이 필요 없습니다.",
   });
   Object.assign(dict, {
-    "What to prepare": "준비할 것", "policy is edited on each backend's page": "정책은 각 백엔드 페이지에서 편집",
+    "What to prepare": "준비할 것", "Sign in when asked": "요청 시 로그인", "MCP clients sign in with OAuth 2.1": "MCP 클라이언트가 OAuth 2.1로 로그인",
+    "This endpoint is public HTTPS and asks callers to sign in. Both products discover the gateway's own OAuth sign-in on their own: paste the URL, sign in with your employee account when the portal's page opens, and every call is made as you.": "이 엔드포인트는 공개 HTTPS이며 호출자에게 로그인을 요구합니다. 두 제품 모두 게이트웨이의 자체 OAuth 로그인을 스스로 찾습니다. URL을 붙여넣고, 포털 페이지가 열리면 직원 계정으로 로그인하세요. 이후 모든 호출은 본인으로 이루어집니다.",
+    "Right after you add the connector, the portal's sign-in page opens. Use your employee email and password (members only, not the admin account). The connector then holds a token bound to you, renewed automatically and listed on the Agent Tokens page, where it can be revoked.": "커넥터를 추가하면 바로 포털 로그인 페이지가 열립니다. 직원 이메일과 비밀번호를 사용하세요(관리자 계정이 아닌 멤버만). 커넥터는 본인에게 묶인 토큰을 갖게 되며, 자동으로 갱신되고 에이전트 토큰 페이지에 표시되어 폐기할 수 있습니다.",
+    "The gateway is its own authorization server (PKCE, dynamic client registration, refresh tokens); identities come from the user directory. Production: federate the sign-in page to Bizplay SSO.": "게이트웨이가 자체 인가 서버입니다(PKCE, 동적 클라이언트 등록, 리프레시 토큰). 신원은 사용자 디렉터리에서 옵니다. 운영 환경: 로그인 페이지를 Bizplay SSO에 연동.",
+    "Both support remote MCP servers and use the same public HTTPS address and the gateway's own OAuth sign-in as the cloud chat products.": "둘 다 원격 MCP 서버를 지원하며 클라우드 채팅 제품과 같은 공개 HTTPS 주소와 게이트웨이 자체 OAuth 로그인을 사용합니다.", "policy is edited on each backend's page": "정책은 각 백엔드 페이지에서 편집",
     "Register the endpoint in the Agentforce MCP registry, then grant the agent access to the tools you enabled for this API.": "Agentforce MCP 레지스트리에 엔드포인트를 등록한 뒤, 이 API에서 활성화한 도구에 에이전트 접근 권한을 주세요.",
     "A hosted gateway with a certificate, OAuth mapped to the customer's identity provider, and an agent token policy per company. The Security page tracks what is still open.": "인증서가 있는 호스팅 게이트웨이, 고객의 ID 제공자에 연결된 OAuth, 회사별 에이전트 토큰 정책. 남은 항목은 보안 페이지에서 추적합니다.",
   });

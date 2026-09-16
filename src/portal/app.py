@@ -36,6 +36,7 @@ from starlette.staticfiles import StaticFiles
 
 from bizplay_mcp import login_auth, audit, oauth, policy_store, specs
 from bizplay_mcp.registry_gateway import build_registry_asgi
+from portal import gateway_oauth
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -257,6 +258,7 @@ async def config(request: Request):
         "registry_url": policy_store.public_url("registry", request.url.hostname),
         # The same registry gateway, served by this portal on the address the browser used.
         "portal_mcp_url": _origin(request) + "/mcp",
+        "oauth_issuer": gateway_oauth.issuer(policy_store.load(), request),
         # What the register dialog prefills; the person registering can change it.
         # The UI prefers the browser's own origin over the server-derived one, since
         # a proxy in front may not forward the host name it was reached on.
@@ -294,8 +296,9 @@ def _security_checklist(state: dict) -> list[dict]:
          "ok": not write_unconfirmed, "detail": "Unconfirmed: " + ", ".join(write_unconfirmed) if write_unconfirmed else "All enabled write tools ask before acting."},
         {"id": "token_ttl", "label": "No agent token lives longer than 90 days",
          "ok": not long_lived, "detail": f"{len(long_lived)} long-lived token(s)" if long_lived else "All tokens expire within 90 days."},
-        {"id": "oauth", "label": "OAuth 2.1 identity provider connected",
-         "ok": False, "detail": "Mockup uses portal-issued static tokens. Production: connect Bizplay SSO."},
+        {"id": "oauth", "label": "MCP clients sign in with OAuth 2.1",
+         "ok": True, "detail": "The gateway is its own authorization server (PKCE, dynamic client registration, refresh tokens); "
+                               "identities come from the user directory. Production: federate the sign-in page to Bizplay SSO."},
         {"id": "secrets", "label": "Upstream credentials stored in a vault",
          "ok": False, "detail": "Mockup stores credentials in a JSON file. Production: KMS / vault."},
     ]
@@ -1412,6 +1415,7 @@ app = Starlette(
         Route("/api/security", update_security, methods=["PUT"]),
         Route("/api/credentials/{cid}/rotate", rotate_credential, methods=["POST"]),
         Route("/api/audit", audit_log),
+        *gateway_oauth.routes,
         Mount("/static", StaticFiles(directory=STATIC_DIR), name="static"),
     ],
     exception_handlers={ApiError: api_error, HTTPException: http_error, 500: server_error},
