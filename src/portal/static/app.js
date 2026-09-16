@@ -176,6 +176,14 @@ $("#login-form").addEventListener("submit", async (e) => {
 });
 $("#logout").addEventListener("click", signOut);
 
+// ---- language ----
+// Korean is applied to the rendered DOM by i18n.js; the buttons only store the choice and reload.
+document.querySelectorAll("[data-lang-toggle]").forEach((b) => {
+  b.querySelector("[data-lang-label]").textContent = I18N.lang === "ko" ? "English" : "한국어";
+  b.onclick = () => I18N.setLang(I18N.lang === "ko" ? "en" : "ko");
+});
+I18N.watch();
+
 // ---- theme ----
 const isDark = () => document.documentElement.dataset.theme === "dark";
 function applyThemeIcon() { $("#theme-toggle i").className = isDark() ? "ph ph-sun" : "ph ph-moon"; }
@@ -223,6 +231,7 @@ function pageActions(html) { $("#page-actions").innerHTML = html || ""; }
 function go(page) {
   page = (page || "").split("?")[0];
   if (!isAdmin() && pages[page] && !MEMBER_PAGES.has(page)) { location.hash = "me"; page = "me"; }
+  if (isAdmin() && page === "me") { location.hash = "overview"; page = "overview"; }
   if (!pages[page]) {
     document.querySelectorAll(".side-nav a").forEach((a) => a.classList.remove("active"));
     $("#page-title").textContent = "Not found"; crumbs({ page: "overview", label: "Not found" }); pageActions(""); $("#tabs").classList.add("hidden");

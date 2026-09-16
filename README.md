@@ -173,6 +173,16 @@ token and register it in bearer mode instead. A useful multi-step prompt:
 "For company 1078836129, scrape Hometax for the first half of September and
 total the VAT."
 
+### Korean and English
+
+The portal is written in English and translated to Korean in the browser:
+`static/i18n.js` holds the dictionary and a few patterns for strings with
+names and numbers in them, and applies them to every rendered page, dialog,
+toast and confirm. The language button in the sidebar (and on the sign-in
+page) stores the choice and reloads. A first visit follows the browser
+language. Data stays as it is: backend names, tool descriptions from specs,
+and audit details are shown as the server produced them.
+
 ### Users: who tokens and linked accounts belong to
 
 The **Users** page is the directory. An agent token is issued *to a person

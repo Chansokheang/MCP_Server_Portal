@@ -418,6 +418,9 @@ tbody tr td { transition: background .12s ease; }
   .anim, .modal, .modal-card, .toast, .login-card { opacity: 1 !important; transform: none !important; }
 }
 
+/* ---- language switch ---- */
+.login-card .lang-switch { justify-self: start; }
+
 /* ---- user directory ---- */
 .who-card { display: flex; align-items: center; gap: 14px; }
 .who-card .avatar { width: 44px; height: 44px; font-size: 16px; }
