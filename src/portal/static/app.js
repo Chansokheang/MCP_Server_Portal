@@ -981,6 +981,15 @@ function pickedUser(f) {
   return { user_id: (f.new_id || "").trim().toLowerCase(), name: (f.new_name || "").trim(), role: f.new_role || "employee", groups: f.new_groups || "" };
 }
 
+/** Does an endpoint's entitlement rule admit a person with these groups and company? */
+function entitled(access, who) {
+  const a = access || { mode: "everyone" };
+  const groups = new Set(who.groups || []);
+  if (a.mode === "groups") return (a.groups || []).some((g) => groups.has(g));
+  if (a.mode === "companies") return (a.companies || []).includes(who.company);
+  return true;
+}
+
 /** Where a fresh token is used: the public address if set, else this portal's own /mcp. */
 const agentUrl = () => SERVER.public_mcp_url || SERVER.default_mcp_url || SERVER.portal_mcp_url || `${location.origin}/mcp`;
 
@@ -1001,14 +1010,18 @@ async function issueDialog(after) {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
     try {
       const r = await api("POST", "/api/tokens", { label: f.label, ttl_days: f.ttl_days, ...(isAdmin() ? pickedUser(f) : {}) });
+      // The endpoints this token opens: the named gateways the person is entitled to. The shared
+      // endpoint is offered only when there is no named gateway for them.
+      const gws = (await api("GET", "/api/gateways").catch(() => ({ items: [] }))).items.filter((g) => entitled(g.access, r.record));
+      const targets = gws.length ? gws.map((g) => ({ label: g.name, url: g.url, id: g.id })) : [{ label: "Shared gateway", url: agentUrl(), id: "" }];
       modal(`<h2><i class="ph ph-check-circle"></i> Token issued</h2><p>Copy it now. It will not be shown again.</p>
         <div class="token-box"><code id="tok-value">${esc(r.token)}</code><button class="btn small" id="tok-copy"><i class="ph ph-copy"></i> Copy</button></div>
-        <h2 class="section-title" style="margin-top:16px">Use it from any MCP client</h2>
-        <pre>URL:    ${esc(agentUrl())}
+        <h2 class="section-title" style="margin-top:16px">${targets.length > 1 ? "Gateways this token opens" : "Use it from any MCP client"}</h2>
+        <pre>${targets.map((t) => `${targets.length > 1 ? esc(t.label) + "\n" : ""}URL:    ${esc(t.url)}`).join("\n\n")}
 Header: Authorization: Bearer ${esc(r.token)}</pre>
-        <p class="muted small" style="margin-top:8px">Bound to ${esc(r.record.user_name || r.record.sub)} (<span class="mono">${esc(r.record.sub)}</span>, ${esc(r.record.role)}), expires ${esc(fmtTs(r.record.expires_at))}.</p>
+        <p class="muted small" style="margin-top:8px">Bound to ${esc(r.record.user_name || r.record.sub)} (<span class="mono">${esc(r.record.sub)}</span>, ${esc(r.record.role)}), expires ${esc(fmtTs(r.record.expires_at))}.${gws.length ? "" : " No named gateway admits this person yet, so the shared endpoint is shown."}</p>
         <div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px"><button class="btn" id="tok-connect"><i class="ph ph-robot"></i> Setup instructions</button><button class="btn solid" id="tok-done">Done</button></div>`);
-      $("#tok-connect").onclick = () => { closeModal(); setHash("gateway", { g: "" }); };
+      $("#tok-connect").onclick = () => { closeModal(); setHash("gateway", { g: targets[0].id }); };
       $("#tok-copy").onclick = () => navigator.clipboard?.writeText(r.token).then(() => toast("Copied", "Token is on your clipboard"));
       $("#tok-done").onclick = () => { closeModal(); (after || pages.tokens)(); };
     } catch (err) { $("#tok-error").textContent = err.message; }
@@ -1639,8 +1652,7 @@ pages.me = async () => {
   const conns = await Promise.all(oauthBackends.map((p) => api("GET", `/api/registry/${p.id}/connections`).then((c) => c.items[0] || null)));
   const alive = (t) => !t.revoked && t.expires_at > toks.now;
   const mine = toks.items.filter(alive);
-  const myGroups = new Set(me.groups || []);
-  const usable = gws.items.filter((g) => { const a = g.access || { mode: "everyone" }; return a.mode === "everyone" || (a.mode === "groups" && (a.groups || []).some((x) => myGroups.has(x))) || (a.mode === "companies" && (a.companies || []).includes(me.company)); });
+  const usable = gws.items.filter((g) => entitled(g.access, me));
   pageActions(`<button class="btn solid" id="btn-issue"><i class="ph ph-plus"></i> Issue token</button>`);
   $("#page").innerHTML = `
     <div class="card"><div class="who-card"><span class="avatar">${esc(initials(me.name))}</span><div><div class="who-name">${esc(me.name)}</div><div class="who-meta"><span class="mono">${esc(me.user_id)}</span> · ${esc(me.user_role || "employee")} · ${esc(me.company || "")}${(me.groups || []).length ? ` · groups: ${esc(me.groups.join(", "))}` : ""}</div></div></div></div>

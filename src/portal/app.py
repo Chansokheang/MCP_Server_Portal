@@ -1062,7 +1062,9 @@ async def refresh_tools(request: Request):
 def _public_gateway(state: dict, g: dict, request: Request) -> dict:
     providers = [state["providers"][pid] for pid in g.get("providers", []) if pid in state["providers"]]
     # Same base as the register prefill: the public endpoint if set, else the address the browser used.
+    policy = policy_store.endpoint_policy(state, g["id"])
     return {**g, "url": _default_endpoint(state, request).rstrip("/") + "/" + g["id"],
+            "access": policy["access"], "require_token": policy["require_token"],
             "backends": [{"id": p["id"], "name": p["name"], "status": p.get("status"),
                           "tools_enabled": sum(t["enabled"] for t in p["tools"].values())} for p in providers],
             "tools_enabled": sum(t["enabled"] for p in providers if p.get("status") == "published" for t in p["tools"].values())}
