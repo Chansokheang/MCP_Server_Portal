@@ -837,7 +837,7 @@ async function testDialog(id) {
       <div style="display:flex;justify-content:${suggestOpen ? "space-between" : "flex-end"};gap:8px;margin-top:8px">
         ${suggestOpen ? `<button class="btn solid" id="t-open"><i class="ph ph-lock-open"></i> Switch to Open mode</button>` : ""}
         <button class="btn" id="t-close">Close</button></div>`);
-    $("#t-close").onclick = () => { closeModal(); pages.registry(); };
+    $("#t-close").onclick = () => { closeModal(); refreshPage(); };
     if (suggestOpen) {
       $("#t-open").onclick = async () => {
         try { await api("PATCH", `/api/registry/${id}`, { auth_mode: "open" }); toast("Switched to Open mode", "Recorded as an accepted risk"); testDialog(id); }
