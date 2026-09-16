@@ -64,14 +64,30 @@ class ResilientProxyProvider(ProxyProvider):
     """A proxied MCP server that cannot be reached lists no tools instead of failing the whole gateway.
 
     A backend in OAuth mode refuses anonymous callers; until someone links an
-    account there is no token to list its tools with.
+    account there is no token to list its tools with. `prepare` fetches (and
+    refreshes) such a token right before a listing, so an expired one after a
+    restart or an idle hour does not make the backend's tools vanish. A failed
+    listing is not cached: the next request tries again.
     """
 
+    def __init__(self, client_factory, *, prepare=None, cache_ttl: float | None = None) -> None:
+        super().__init__(client_factory, cache_ttl=cache_ttl)
+        self._prepare = prepare
+
     async def _list_tools(self) -> Sequence[Any]:
+        reset = None
         try:
+            # A user's call in flight already carries their token; only a bare listing needs one.
+            if self._prepare and oauth.upstream_token.get() is None:
+                token = await self._prepare()
+                if token:
+                    reset = oauth.upstream_token.set(token)
             return await super()._list_tools()
         except Exception:  # noqa: BLE001 - connection, auth, or protocol failure: same outcome
             return []
+        finally:
+            if reset is not None:
+                oauth.upstream_token.reset(reset)
 
 
 def namespace_for(provider_id: str) -> str:
@@ -307,7 +323,13 @@ class ProviderRegistry:
                 factory = lambda: self.mcp_client_factory(provider, call_headers())  # noqa: E731
             else:
                 factory = lambda: ProxyClient(specs.mcp_transport(provider["base_url"], call_headers()))  # noqa: E731
-            self.gateway.add_provider(ResilientProxyProvider(factory), namespace=ns)
+
+            async def prepare() -> str | None:
+                fresh = policy_store.load()
+                return await oauth.listing_token(fresh, fresh["providers"].get(pid, provider))
+
+            self.gateway.add_provider(
+                ResilientProxyProvider(factory, prepare=prepare if provider.get("auth_mode") == "oauth" else None), namespace=ns)
         else:
             # Older registrations stored raw operationIds; serve what FastMCP names.
             if specs.reconcile_tool_names(provider):

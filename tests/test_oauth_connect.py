@@ -254,6 +254,43 @@ async def test_mcp_backend_in_oauth_mode(admin, auth_server, as_user, monkeypatc
             await c.call_tool("tasks_list_tasks", {})
 
 
+async def test_mcp_backend_tools_survive_an_expired_token(admin, auth_server, as_user, monkeypatch):
+    """After a restart or an idle hour every stored token may be expired; listing must refresh one, not go empty."""
+    monkeypatch.setattr(portal_module, "mcp_client", lambda url, headers: Client(tasks))
+    pid = (await admin.post("/api/registry", json={"name": "Tasks", "kind": "mcp", "base_url": "http://tasks.test/mcp", "auth_mode": "oauth"})).json()["id"]
+    await admin.post(f"/api/registry/{pid}/oauth/discover", json={"url": AS})
+    await admin.post(f"/api/registry/{pid}/publish")
+    await link(admin, auth_server, pid, "emp001")
+    state = policy_store.load()
+    state["user_connections"]["emp001"][pid]["expires_at"] = time.time() - 1
+    policy_store.save(state)
+
+    headers: list[dict] = []
+
+    def factory(provider, h):
+        headers.append(h)
+        return ProxyClient(tasks)
+
+    # A bare listing by someone with no linked account (a new connector handshake, say).
+    as_user("emp002")
+    async with Client(gateway(factory)) as c:
+        assert "tasks_list_tasks" in {t.name for t in await c.list_tools()}
+    assert auth_server.refreshed == 1 and headers[-1] == {"Authorization": "Bearer at:emp001:2"}, "listed with a refreshed token"
+    assert policy_store.load()["user_connections"]["emp001"][pid]["access_token"] == "at:emp001:2", "and the refresh was kept"
+
+    # The auth server going away does not break the gateway: listing goes ahead without a fresh token
+    # (this mock backend is open; a real one would answer 401 and list nothing until the server is back).
+    def dead(request):
+        raise httpx.ConnectError("connection refused", request=request)
+    monkeypatch.setattr(oauth, "http_client_factory", lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(dead), **kw))
+    state = policy_store.load()
+    state["user_connections"]["emp001"][pid]["expires_at"] = time.time() - 1
+    policy_store.save(state)
+    async with Client(gateway(factory)) as c:
+        names = {t.name for t in await c.list_tools()}
+    assert names and auth_server.refreshed == 1 and "Authorization" not in headers[-1], "no refresh possible, gateway still up"
+
+
 async def test_auth_server_down_during_refresh_reads_as_that(admin, auth_server, items_api, as_user, monkeypatch):
     await link(admin, auth_server, items_api, "emp001")
     state = policy_store.load()

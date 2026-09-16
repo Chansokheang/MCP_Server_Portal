@@ -220,6 +220,26 @@ async def access_token_for(state: dict, provider: dict, user_id: str) -> str | N
     return record["access_token"]
 
 
+async def listing_token(state: dict, provider: dict) -> str | None:
+    """Some linked user's valid token, refreshing an expired one, for reading tool metadata.
+
+    The tool list is the same for every user, so any linked account will do; but
+    after a restart or an idle hour every stored access token may have expired,
+    and only a refresh gets the list back. Errors from the auth server are
+    swallowed here: the caller treats "no token" as "no tools for now".
+    """
+    for user_id, per_user in list(state.get("user_connections", {}).items()):
+        if provider["id"] not in per_user:
+            continue
+        try:
+            token = await access_token_for(state, provider, user_id)
+        except (OAuthError, httpx.HTTPError):
+            continue
+        if token:
+            return token
+    return None
+
+
 def any_token(state: dict, provider_id: str) -> str | None:
     """Some user's unexpired token, for reading tool metadata that is not per user."""
     for per_user in state.get("user_connections", {}).values():
