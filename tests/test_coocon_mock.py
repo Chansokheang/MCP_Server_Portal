@@ -35,6 +35,18 @@ async def test_mock_serves_project_based_scraping(monkeypatch):
         again = (await c.post("/api/v1/projects/prj-1001/jobs", json={"source": "hometax", "dateFrom": "2026-09-01", "dateTo": "2026-09-10"})).json()
         assert again["recordCount"] == job["recordCount"], "deterministic for the same request"
 
+    monkeypatch.setenv("COOCON_AUTH", "login")
+    async with httpx.AsyncClient(base_url="http://coocon.test", transport=httpx.ASGITransport(app=coocon)) as c:
+        assert (await c.get("/api/v1/me")).status_code == 401
+        assert (await c.post("/auth/login", json={"username": "minji", "password": "nope"})).status_code == 401
+        jwt = (await c.post("/auth/login", json={"username": "minji", "password": "minji1234"})).json()["accessToken"]
+        assert jwt.count(".") == 2, "a real header.payload.signature JWT"
+        me = (await c.get("/api/v1/me", headers={"Authorization": f"Bearer {jwt}"})).json()
+        assert me["username"] == "minji"
+        tampered = jwt[:-2] + ("AA" if not jwt.endswith("AA") else "BB")
+        assert (await c.get("/api/v1/me", headers={"Authorization": f"Bearer {tampered}"})).status_code == 401
+    monkeypatch.delenv("COOCON_AUTH", raising=False)
+
     monkeypatch.setenv("COOCON_API_TOKEN", "s3cret")
     async with httpx.AsyncClient(base_url="http://coocon.test", transport=httpx.ASGITransport(app=coocon)) as c:
         assert (await c.get("/api/v1/sources")).status_code == 401
@@ -49,6 +61,7 @@ async def test_coocon_through_the_gateway(admin, monkeypatch):
     pid = r.json()["id"]
     assert (await admin.post(f"/api/registry/{pid}/publish")).status_code == 200
     tools = {t["name"]: t for t in (await admin.get(f"/api/registry/{pid}/tools")).json()["items"]}
+    assert "login" not in tools and "/auth/login" in OPENAPI["paths"], "in the spec for Swagger, never a tool (x-mcp: exclude)"
     assert tools["listProjects"]["kind"] == "read" and tools["listProjects"]["enabled"]
     assert tools["startJob"]["kind"] == "write" and not tools["startJob"]["enabled"], "writes start disabled"
 

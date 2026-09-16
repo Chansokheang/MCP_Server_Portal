@@ -382,7 +382,7 @@ class ProviderRegistry:
             # (e.g. Spring's "200 OK" status enum vs an actual "OK"). A strict output
             # schema would make the MCP client reject perfectly good data.
             self.gateway.add_provider(
-                OpenAPIProvider(openapi_spec=provider["spec"], client=client, validate_output=False),
+                OpenAPIProvider(openapi_spec=specs.gateway_spec(provider["spec"]), client=client, validate_output=False),
                 namespace=ns,
             )
         self.prefixes[ns + "_"] = provider["id"]

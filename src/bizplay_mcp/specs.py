@@ -33,13 +33,33 @@ def mcp_transport(url: str, headers: dict[str, str]) -> StreamableHttpTransport 
 READ_VERBS = re.compile(r"(^|_)(get|list|search|find|read|describe|fetch|show|query|count|health|check|lookup)", re.I)
 
 
+HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+
+
+def gateway_spec(spec: dict) -> dict:
+    """The spec minus operations marked `x-mcp: exclude` (a login endpoint, say): those are not tools.
+
+    An API's sign-in call belongs in its spec so Swagger and humans see it, but
+    the gateway does the signing in itself and must never offer it to a model.
+    """
+    paths = {}
+    for path, item in (spec.get("paths") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        kept = {m: op for m, op in item.items()
+                if m.lower() not in HTTP_METHODS or not (isinstance(op, dict) and str(op.get("x-mcp", "")).lower() == "exclude")}
+        if any(m.lower() in HTTP_METHODS for m in kept):
+            paths[path] = kept
+    return {**spec, "paths": paths}
+
+
 def tools_from_spec(spec: dict) -> dict[str, dict]:
     """Tool policy rows keyed by the exact name FastMCP will serve.
 
     Reads are on, writes and deletes are off until someone chooses them.
     """
     # The provider builds every tool up front; the base URL is never called.
-    provider = OpenAPIProvider(openapi_spec=spec, client=httpx2.AsyncClient(base_url="http://spec.invalid"),
+    provider = OpenAPIProvider(openapi_spec=gateway_spec(spec), client=httpx2.AsyncClient(base_url="http://spec.invalid"),
                                validate_output=False)
     tools = {}
     for tool in provider._tools.values():  # pinned FastMCP; no public sync accessor for the table

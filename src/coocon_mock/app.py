@@ -14,20 +14,23 @@ Run:
 Auth, chosen by COOCON_AUTH:
     open   (default) anonymous calls allowed
     token  /api/* needs `Authorization: Bearer $COOCON_API_TOKEN` (the gateway's bearer mode)
-    login  /api/* needs a token from `POST /auth/login` {"username", "password"}, the
+    login  /api/* needs the JWT from `POST /auth/login` {"username", "password"}, the
            gateway's login-endpoint mode. Users come from COOCON_LOGIN_USERS
-           ("minji:minji1234,junho:junho1234,svc:svc1234" by default); tokens
-           last COOCON_TOKEN_TTL seconds (3600). GET /api/v1/me says who you are.
+           ("minji:minji1234,junho:junho1234,svc:svc1234" by default); tokens are
+           HS256 JWTs signed with COOCON_JWT_SECRET, valid COOCON_TOKEN_TTL seconds
+           (3600). GET /api/v1/me says who you are.
 Setting COOCON_API_TOKEN alone still means token mode, as before.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
+import json
 import os
 import random
-import secrets
 from datetime import date, datetime, timedelta, timezone
 
 from starlette.applications import Starlette
@@ -99,7 +102,40 @@ def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
 
 
-SESSIONS: dict[str, dict] = {}  # login tokens -> {"username", "expires_at"}
+def jwt_secret() -> str:
+    return os.environ.get("COOCON_JWT_SECRET") or "coocon-demo-secret"
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def issue_jwt(username: str, ttl: int) -> str:
+    """A real HS256 JWT: header.payload.signature, claims sub / iat / exp / iss."""
+    now = int(datetime.now(timezone.utc).timestamp())
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    payload = _b64(json.dumps({"sub": username, "iat": now, "exp": now + ttl, "iss": "coocon-mock"}, separators=(",", ":")).encode())
+    signature = _b64(hmac.new(jwt_secret().encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    return f"{header}.{payload}.{signature}"
+
+
+def verify_jwt(token: str) -> dict | None:
+    """The claims when the signature checks out and the token has not expired, else None."""
+    try:
+        header, payload, signature = token.split(".")
+        expected = _b64(hmac.new(jwt_secret().encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(signature, expected):
+            return None
+        claims = json.loads(_unb64(payload))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if claims.get("exp", 0) < datetime.now(timezone.utc).timestamp():
+        return None
+    return claims
 
 
 def auth_mode() -> str:
@@ -127,15 +163,15 @@ class OptionalBearer(BaseHTTPMiddleware):
             if mode == "token" and _bearer(request) != os.environ.get("COOCON_API_TOKEN"):
                 return refused
             if mode == "login":
-                session = SESSIONS.get(_bearer(request))
-                if not session or session["expires_at"] < datetime.now(timezone.utc).timestamp():
+                claims = verify_jwt(_bearer(request))
+                if not claims:
                     return refused
-                request.state.username = session["username"]
+                request.state.username = claims["sub"]
         return await call_next(request)
 
 
 async def login(request: Request):
-    """POST {"username", "password"} -> {"accessToken", "expiresIn", "username"}; wrong password -> 401."""
+    """POST {"username", "password"} -> {"accessToken": <JWT>, "expiresIn", "username"}; wrong password -> 401."""
     try:
         body = await request.json()
     except ValueError:
@@ -144,9 +180,7 @@ async def login(request: Request):
     if login_users().get(username) != password or not password:
         return _error(401, "invalid username or password")
     ttl = int(os.environ.get("COOCON_TOKEN_TTL") or 3600)
-    token = "ct_" + secrets.token_urlsafe(24)
-    SESSIONS[token] = {"username": username, "expires_at": datetime.now(timezone.utc).timestamp() + ttl}
-    return JSONResponse({"accessToken": token, "tokenType": "Bearer", "expiresIn": ttl, "username": username})
+    return JSONResponse({"accessToken": issue_jwt(username, ttl), "tokenType": "Bearer", "expiresIn": ttl, "username": username})
 
 
 async def me(request: Request):
@@ -255,21 +289,34 @@ def _param(name, where, desc, required=False, schema=None, example=None):
 OPENAPI = {
     "openapi": "3.0.3",
     "info": {"title": "COOCON Scraping API (mock)", "version": "1.0.0",
-             "description": "Project-based scraping of a company's financial data. A project belongs to one company (corpNo) and lists the sources it may scrape; a job scrapes one source for a date range and yields records. Sign in with POST /auth/login {username, password} and send the accessToken as a bearer (not part of this spec on purpose: the gateway does the sign-in)."},
+             "description": "Project-based scraping of a company's financial data. A project belongs to one company (corpNo) and lists the sources it may scrape; a job scrapes one source for a date range and yields records. Sign in with POST /auth/login and send the JWT it returns as a bearer token (Authorize button). The MCP gateway does that sign-in itself, so the login call is marked x-mcp: exclude and never becomes a tool."},
+    "components": {"securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT",
+                                                      "description": "The accessToken from POST /auth/login"}}},
+    "security": [{"bearerAuth": []}],
+    "tags": [{"name": "auth", "description": "Sign-in"}, {"name": "scraping", "description": "Projects, jobs and records"}],
     "paths": {
-        "/api/v1/me": {"get": {"operationId": "whoami", "summary": "Who the API thinks is calling",
+        "/auth/login": {"post": {"operationId": "login", "tags": ["auth"], "security": [], "x-mcp": "exclude",
+                                 "summary": "Sign in and get a JWT",
+                                 "description": "Trade a username and password for an HS256 JWT (claims sub, iat, exp). Send it as Authorization: Bearer <token> on every /api call. Demo users: minji / minji1234, junho / junho1234, svc / svc1234.",
+                                 "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["username", "password"], "properties": {
+                                     "username": {"type": "string", "example": "minji"}, "password": {"type": "string", "format": "password", "example": "minji1234"}}}}}},
+                                 "responses": {"200": {"description": "signed in", "content": {"application/json": {"schema": {"type": "object", "properties": {
+                                     "accessToken": {"type": "string", "description": "JWT"}, "tokenType": {"type": "string", "example": "Bearer"},
+                                     "expiresIn": {"type": "integer", "description": "seconds"}, "username": {"type": "string"}}}}}},
+                                               "401": {"description": "wrong username or password"}}}},
+        "/api/v1/me": {"get": {"operationId": "whoami", "tags": ["scraping"], "summary": "Who the API thinks is calling",
                                "description": "The signed-in username behind this call, or 'anonymous'. Useful to confirm which account the gateway signed in with.",
                                "responses": {"200": {"description": "ok"}}}},
-        "/api/v1/sources": {"get": {"operationId": "listSources", "summary": "List the data sources that can be scraped",
+        "/api/v1/sources": {"get": {"operationId": "listSources", "tags": ["scraping"], "summary": "List the data sources that can be scraped",
                                     "description": "The catalogue of sources (bank accounts, corporate cards, Hometax tax invoices, the four major insurances) with the kind of records each one yields. Use it to explain what a project can collect.",
                                     "responses": {"200": {"description": "ok"}}}},
         "/api/v1/projects": {
-            "get": {"operationId": "listProjects", "summary": "List scraping projects, optionally for one company or status",
+            "get": {"operationId": "listProjects", "tags": ["scraping"], "summary": "List scraping projects, optionally for one company or status",
                     "description": "Every project this API knows. Filter by corpNo to see one company's projects, or by status (active, paused). Start here to find a projectId.",
                     "parameters": [_param("corpNo", "query", "Company number to filter by", example="1078836129"),
                                    _param("status", "query", "active or paused", schema={"type": "string", "enum": ["active", "paused"]})],
                     "responses": {"200": {"description": "ok"}}},
-            "post": {"operationId": "createProject", "summary": "Create a scraping project for a company",
+            "post": {"operationId": "createProject", "tags": ["scraping"], "summary": "Create a scraping project for a company",
                      "description": "Sets up a project that may scrape the listed sources for one company. Returns the new projectId.",
                      "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["name", "corpNo", "sources"], "properties": {
                          "name": {"type": "string", "description": "Project name, e.g. 'DemoCorp01 monthly close'"},
@@ -278,18 +325,18 @@ OPENAPI = {
                          "owner": {"type": "string", "description": "Contact email"}}}}}},
                      "responses": {"201": {"description": "created"}}},
         },
-        "/api/v1/projects/{projectId}": {"get": {"operationId": "getProject", "summary": "Get one project by id",
+        "/api/v1/projects/{projectId}": {"get": {"operationId": "getProject", "tags": ["scraping"], "summary": "Get one project by id",
                                                  "parameters": [_param("projectId", "path", "Project id from listProjects", True, example="prj-1001")],
                                                  "responses": {"200": {"description": "ok"}, "404": {"description": "unknown project"}}}},
-        "/api/v1/projects/{projectId}/summary": {"get": {"operationId": "getProjectSummary", "summary": "Totals per source for a project",
+        "/api/v1/projects/{projectId}/summary": {"get": {"operationId": "getProjectSummary", "tags": ["scraping"], "summary": "Totals per source for a project",
                                                          "description": "Jobs run, records collected and total amount per source, plus when the last job ran. Good first answer to 'how is project X doing'.",
                                                          "parameters": [_param("projectId", "path", "Project id", True, example="prj-1001")],
                                                          "responses": {"200": {"description": "ok"}}}},
         "/api/v1/projects/{projectId}/jobs": {
-            "get": {"operationId": "listJobs", "summary": "List scraping jobs of a project",
+            "get": {"operationId": "listJobs", "tags": ["scraping"], "summary": "List scraping jobs of a project",
                     "parameters": [_param("projectId", "path", "Project id", True, example="prj-1001")],
                     "responses": {"200": {"description": "ok"}}},
-            "post": {"operationId": "startJob", "summary": "Start a scraping job for one source and date range",
+            "post": {"operationId": "startJob", "tags": ["scraping"], "summary": "Start a scraping job for one source and date range",
                      "description": "Scrapes the given source for the project's company between dateFrom and dateTo (YYYY-MM-DD). The mock completes immediately; read the records with getJobRecords. The source must be one the project is set up for.",
                      "parameters": [_param("projectId", "path", "Project id", True, example="prj-1001")],
                      "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["source"], "properties": {
@@ -298,10 +345,10 @@ OPENAPI = {
                          "dateTo": {"type": "string", "format": "date", "description": "Last day, YYYY-MM-DD (default 2026-09-30)"}}}}}},
                      "responses": {"201": {"description": "job created"}, "409": {"description": "source not enabled for this project"}}},
         },
-        "/api/v1/jobs/{jobId}": {"get": {"operationId": "getJob", "summary": "Status of one scraping job",
+        "/api/v1/jobs/{jobId}": {"get": {"operationId": "getJob", "tags": ["scraping"], "summary": "Status of one scraping job",
                                          "parameters": [_param("jobId", "path", "Job id from startJob or listJobs", True, example="job-0001")],
                                          "responses": {"200": {"description": "ok"}}}},
-        "/api/v1/jobs/{jobId}/records": {"get": {"operationId": "getJobRecords", "summary": "Records a job scraped (transactions, invoices, premiums)",
+        "/api/v1/jobs/{jobId}/records": {"get": {"operationId": "getJobRecords", "tags": ["scraping"], "summary": "Records a job scraped (transactions, invoices, premiums)",
                                                  "description": "The rows collected by a finished job. Bank rows carry amount (negative = withdrawal) and counterparty; card rows carry merchant and approved; Hometax rows carry supplyAmount, vat and direction; insurance rows carry premium and employees. Every row carries corpNo.",
                                                  "parameters": [_param("jobId", "path", "Job id", True, example="job-0001"),
                                                                 _param("limit", "query", "Max rows, up to 200", schema={"type": "integer", "default": 50})],
@@ -318,7 +365,7 @@ SWAGGER_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>COOCON
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.css"></head>
 <body><div id="swagger-ui"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.js"></script>
-<script>SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui", tryItOutEnabled: true});</script></body></html>"""
+<script>SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui", tryItOutEnabled: true, persistAuthorization: true});</script></body></html>"""
 
 
 async def swagger_ui(request: Request):
