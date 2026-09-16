@@ -86,7 +86,11 @@ function modal(html) {
   replay($("#modal .modal-card"), "modal-card");
 }
 function closeModal() { $("#modal").classList.add("hidden"); }
-$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+// Close on a click on the backdrop only when the press started there too: a text selection
+// that begins in a field and ends outside the card must not throw the dialog away.
+let pressedOnBackdrop = false;
+$("#modal").addEventListener("mousedown", (e) => { pressedOnBackdrop = e.target.id === "modal"; });
+$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal" && pressedOnBackdrop) closeModal(); pressedOnBackdrop = false; });
 
 const SKELETON = `<div class="skeleton" aria-busy="true"><div class="bar w-40"></div><div class="bar tall"></div><div class="bar w-70"></div><div class="bar tall"></div></div>`;
 const emptyState = (icon, title, hint) => `<div class="empty"><span class="mark"><i class="ph ph-${icon}"></i></span><strong>${title}</strong><span class="small">${hint}</span></div>`;
