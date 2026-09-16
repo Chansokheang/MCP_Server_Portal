@@ -9,7 +9,7 @@ The OpenAPI spec is hand-written with real summaries and descriptions: it is
 what the gateway turns into tools, and what the model reads to choose one.
 
 Run:
-    uv run coocon-mock --port 18096          # http://127.0.0.1:18096/openapi.json
+    uv run coocon-mock --port 18096          # spec at /openapi.json, Swagger UI at /docs
 
 Set COOCON_API_TOKEN to require `Authorization: Bearer <token>` on /api/*,
 to exercise the gateway's bearer mode; unset, the API is open.
@@ -27,7 +27,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 SOURCES = {
@@ -258,9 +258,23 @@ async def openapi(request: Request):
     return JSONResponse(OPENAPI)
 
 
+SWAGGER_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>COOCON Scraping API (mock)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.css"></head>
+<body><div id="swagger-ui"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui", tryItOutEnabled: true});</script></body></html>"""
+
+
+async def swagger_ui(request: Request):
+    """Browse and try the API, at the path Spring users expect and at /docs."""
+    return HTMLResponse(SWAGGER_HTML)
+
+
 app = Starlette(routes=[
     Route("/health", health),
     Route("/openapi.json", openapi),
+    Route("/docs", swagger_ui),
+    Route("/swagger-ui/index.html", swagger_ui),
     Route("/api/v1/sources", list_sources),
     Route("/api/v1/projects", list_projects),
     Route("/api/v1/projects", create_project, methods=["POST"]),
