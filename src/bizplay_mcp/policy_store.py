@@ -31,13 +31,16 @@ GATEWAY_TOOLS = [
 ]
 
 
+# A user's company is the corp number (corpNo) the gateway scopes calls and results to.
+DEMO_CORP = "1078836129"
+
 # DEMO ONLY: plain-text passwords, as for portal_users.
 DEMO_USERS = [
-    {"id": "emp001", "name": "Kim Minji", "email": "minji@bizplay.co.kr", "role": "employee", "company": "Bizplay Demo Co.",
+    {"id": "emp001", "name": "Kim Minji", "email": "minji@bizplay.co.kr", "role": "employee", "company": DEMO_CORP,
      "groups": ["finance"], "password": "minji1234", "created_at": "2026-09-11T09:00:00+00:00"},
-    {"id": "emp002", "name": "Lee Junho", "email": "junho@bizplay.co.kr", "role": "employee", "company": "Bizplay Demo Co.",
+    {"id": "emp002", "name": "Lee Junho", "email": "junho@bizplay.co.kr", "role": "employee", "company": DEMO_CORP,
      "groups": ["hr"], "password": "junho1234", "created_at": "2026-09-11T09:00:00+00:00"},
-    {"id": "mgr001", "name": "Park Seojin", "email": "seojin@bizplay.co.kr", "role": "manager", "company": "Bizplay Demo Co.",
+    {"id": "mgr001", "name": "Park Seojin", "email": "seojin@bizplay.co.kr", "role": "manager", "company": DEMO_CORP,
      "groups": ["finance"], "password": None, "created_at": "2026-09-11T09:00:00+00:00"},
 ]
 
@@ -126,6 +129,7 @@ AUTH_MODES = {
     "network": "Network-isolated: the API has no token but is reachable only from the gateway's address.",
     "open": "Open: the API accepts anonymous calls. Demo data only; recorded as an accepted risk.",
     "oauth": "OAuth: each user links their own account; the gateway sends that user's token.",
+    "login": "Login endpoint: the gateway signs in with a username and password and sends the token it gets back.",
 }
 
 KINDS = {
@@ -193,6 +197,10 @@ def load() -> dict:
         state.setdefault("gateways", {})
         state.setdefault("endpoint_settings", {})
         state.setdefault("users", {u["id"]: dict(u) for u in DEMO_USERS})
+        for u in state["users"].values():
+            # Earlier seeds stored a display name here; the gateway needs the corp number.
+            if u.get("company") == "Bizplay Demo Co.":
+                u["company"] = DEMO_CORP
         return state
 
 

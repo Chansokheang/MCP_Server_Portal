@@ -34,7 +34,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from bizplay_mcp import audit, oauth, policy_store, specs
+from bizplay_mcp import login_auth, audit, oauth, policy_store, specs
 from bizplay_mcp.registry_gateway import build_registry_asgi
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -75,6 +75,7 @@ MEMBER_ROUTES = [
     ("POST", re.compile(r"^/api/tokens/[^/]+/revoke$")),
     ("GET", re.compile(r"^/api/registry/[^/]+/(connections|tools)$")),
     ("POST", re.compile(r"^/api/registry/[^/]+/oauth/start$")),
+    ("POST", re.compile(r"^/api/registry/[^/]+/login/connect$")),
     ("DELETE", re.compile(r"^/api/registry/[^/]+/connections/[^/]+$")),
     ("GET", re.compile(r"^/api/endpoints/[^/]+/settings$")),
 ]
@@ -184,7 +185,7 @@ def _apply_user_fields(u: dict, body: dict, state: dict) -> None:
             raise ApiError(400, "role must be employee or manager")
         u["role"] = body["role"]
     if "company" in body:
-        u["company"] = (body["company"] or "").strip() or "Bizplay Demo Co."
+        u["company"] = (body["company"] or "").strip() or policy_store.DEMO_CORP
     if "groups" in body:
         u["groups"] = _listed(body["groups"])
     if "password" in body:
@@ -204,7 +205,7 @@ async def create_user(request: Request):
         raise ApiError(400, "id is required: letters, digits, - or _ (the Bizplay user id agents call with)")
     if uid in state["users"]:
         raise ApiError(409, f"user {uid} already exists")
-    u = {"id": uid, "name": uid, "email": "", "role": "employee", "company": "Bizplay Demo Co.", "groups": [], "password": None,
+    u = {"id": uid, "name": uid, "email": "", "role": "employee", "company": policy_store.DEMO_CORP, "groups": [], "password": None,
          "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     _apply_user_fields(u, body, state)
     state["users"][uid] = u
@@ -373,7 +374,15 @@ def _public_provider(p: dict) -> dict:
     out["oauth"] = {k: v for k, v in cfg.items() if k != "client_secret"} | {"has_client_secret": bool(cfg.get("client_secret"))}
     out["oauth_ready"] = _oauth_ready(p)
     out["access"] = p.get("access") or {"mode": "everyone", "groups": [], "companies": []}
-    out["connections"] = len(oauth.public_connections(policy_store.load(), p["id"])) if p.get("auth_mode") == "oauth" else 0
+    out["login"] = login_auth.config(p)
+    out["login_ready"] = login_auth.ready(p)
+    out["per_user"] = p.get("auth_mode") == "oauth" or (p.get("auth_mode") == "login" and out["login"]["per_user"])
+    out["connections"] = len(oauth.public_connections(policy_store.load(), p["id"])) if out["per_user"] else 0
+    if p.get("auth_mode") == "login" and not out["login"]["per_user"]:
+        cred = policy_store.load()["credentials"].get(p.get("upstream_credential_id", ""), {})
+        cached = cred.get("cached") or {}
+        out["service_account"] = {"username": cred.get("username") or "", "has_password": bool(cred.get("secret")),
+                                  "signed_in_at": cached.get("signed_in_at"), "expires_at": cached.get("expires_at")}
     out["has_spec"] = bool(p.get("spec"))
     out["standalone_url"] = policy_store.standalone_url(p)
     out["tool_count"] = len(p["tools"])
@@ -426,6 +435,13 @@ def _oauth_config(body: dict, existing: dict | None = None) -> dict:
     return cfg
 
 
+def _login_config(body: dict, existing: dict | None = None) -> dict:
+    try:
+        return login_auth.parse_config(body, existing)
+    except ValueError as exc:
+        raise ApiError(400, str(exc)) from None
+
+
 def _listed(value) -> list[str]:
     """A list from either a JSON list or a comma-separated string, trimmed and de-duplicated."""
     items = value.split(",") if isinstance(value, str) else list(value or [])
@@ -461,6 +477,20 @@ def _oauth_ready(p: dict) -> bool:
 def mcp_client(url: str, headers: dict[str, str]) -> Client:
     """Client for an MCP server being registered. Tests swap this for an in-memory one."""
     return Client(specs.mcp_transport(url, headers), timeout=15)
+
+
+async def _backend_headers_for(state: dict, p: dict, user_id: str | None = None) -> dict[str, str]:
+    """Like _backend_headers, but a login-endpoint backend may need a sign-in first."""
+    if p.get("auth_mode") == "login":
+        try:
+            if user_id and login_auth.config(p)["per_user"]:
+                token = await login_auth.user_token(state, p, user_id)
+            else:
+                token = await login_auth.listing_token(state, p)
+        except login_auth.LoginError as exc:
+            raise ApiError(502, f"sign-in failed: {exc}") from None
+        return login_auth.header_for(p, token) if token else {}
+    return _backend_headers(state, p, user_id)
 
 
 def _backend_headers(state: dict, p: dict, user_id: str | None = None) -> dict[str, str]:
@@ -520,6 +550,9 @@ async def register_provider(request: Request):
     base_note = ""
     spec = None
     oauth_cfg = _oauth_config(body.get("oauth") or {}) if auth_mode == "oauth" else {}
+    login_cfg = _login_config(body.get("login") or {}) if auth_mode == "login" else {}
+    login_user = (body.get("login_username") or "").strip()
+    login_password = body.get("login_password") or ""
     if kind == "mcp":
         # An MCP server that already exists: its own tool list is the policy table.
         # In OAuth mode nobody has linked an account yet, so the list waits for
@@ -527,6 +560,16 @@ async def register_provider(request: Request):
         if auth_mode == "oauth":
             tools = {}
             base_note = "OAuth backend: connect an account, then Refresh tools to load its tool list."
+        elif auth_mode == "login" and (login_cfg.get("per_user") or not (login_user and login_password)):
+            tools = {}
+            base_note = "Login backend: connect an account, then Refresh tools to load its tool list."
+        elif auth_mode == "login":
+            draft = {"id": "new", "login": login_cfg}
+            try:
+                token = (await login_auth.sign_in(draft, login_user, login_password))["access_token"]
+            except login_auth.LoginError as exc:
+                raise ApiError(400, f"service account sign-in failed: {exc}") from None
+            tools = await _tools_from_mcp_server(base_url, login_auth.header_for(draft, token))
         else:
             headers = {"Authorization": f"Bearer {service_token}"} if auth_mode == "bearer" and service_token else {}
             tools = await _tools_from_mcp_server(base_url, headers)
@@ -553,14 +596,20 @@ async def register_provider(request: Request):
     if pid in state["providers"]:
         pid = f"{pid}-{secrets.token_hex(2)}"
     cred_id = f"cred_{pid}_service"
-    state["credentials"][cred_id] = {
-        "id": cred_id, "provider_id": pid, "label": f"Gateway -> {name} service token", "type": "bearer",
-        "secret": service_token, "created_at": _now_iso(), "rotated_at": None,
-    }
+    if auth_mode == "login":
+        state["credentials"][cred_id] = {
+            "id": cred_id, "provider_id": pid, "label": f"Gateway -> {name} service account", "type": "login",
+            "username": login_user, "secret": login_password, "cached": {}, "created_at": _now_iso(), "rotated_at": None,
+        }
+    else:
+        state["credentials"][cred_id] = {
+            "id": cred_id, "provider_id": pid, "label": f"Gateway -> {name} service token", "type": "bearer",
+            "secret": service_token, "created_at": _now_iso(), "rotated_at": None,
+        }
     state["providers"][pid] = {
         "id": pid, "name": name, "owner": request.state.user, "kind": kind, "base_url": base_url,
         "spec_source": spec_source, "spec": spec,
-        "mcp_url": mcp_url, "standalone": False, "oauth": oauth_cfg,
+        "mcp_url": mcp_url, "standalone": False, "oauth": oauth_cfg, "login": login_cfg,
         "tool_prefix": pid.replace("-", "_") + "_",
         "status": "draft", "auth_mode": auth_mode, "allowlist": allowlist, "upstream_credential_id": cred_id,
         "identity": {"issuer": "portal", "user_claim": "sub", "role_claim": "role", "company_claim": "company"},
@@ -584,12 +633,25 @@ async def update_provider(request: Request):
             raise ApiError(400, "base_url must start with http")
         p["base_url"], note = _normalize_base_url(base_url, p.get("spec") or {})
         # A moved MCP server may expose a different tool list; refresh it, keeping policy.
-        if p.get("kind") == "mcp" and (p.get("auth_mode") != "oauth" or oauth.any_token(state, p["id"])):
-            fresh = await _tools_from_mcp_server(p["base_url"], _backend_headers(state, p))
+        if p.get("kind") == "mcp" and (p.get("auth_mode") not in ("oauth", "login") or oauth.any_token(state, p["id"])
+                                       or p.get("auth_mode") == "login"):
+            fresh = await _tools_from_mcp_server(p["base_url"], await _backend_headers_for(state, p))
             _merge_tools(p, fresh)
             note = f"Tool list refreshed: {len(fresh)} tool(s)."
     if "oauth" in body and isinstance(body["oauth"], dict):
         p["oauth"] = _oauth_config(body["oauth"], p.get("oauth"))
+    if "login" in body and isinstance(body["login"], dict):
+        p["login"] = _login_config(body["login"], p.get("login"))
+        cred = state["credentials"].get(p["upstream_credential_id"])
+        if cred is not None:
+            cred["cached"] = {}  # a changed endpoint or field path invalidates whatever token was cached
+    if body.get("login_username") or body.get("login_password"):
+        cred = state["credentials"][p["upstream_credential_id"]]
+        cred.update(type="login", cached={}, rotated_at=_now_iso())
+        if body.get("login_username"):
+            cred["username"] = body["login_username"].strip()
+        if body.get("login_password"):
+            cred["secret"] = body["login_password"]
     if "access" in body and isinstance(body["access"], dict):
         p["access"] = _access_config(body["access"])
     if "mcp_url" in body and body["mcp_url"].strip():
@@ -606,8 +668,9 @@ async def update_provider(request: Request):
     if p["auth_mode"] == "network" and not p.get("allowlist"):
         raise ApiError(400, "network mode needs the gateway address the API allows")
     if body.get("service_token"):
-        state["credentials"][p["upstream_credential_id"]]["secret"] = body["service_token"].strip()
-        state["credentials"][p["upstream_credential_id"]]["rotated_at"] = _now_iso()
+        state["credentials"][p["upstream_credential_id"]].update(type="bearer", secret=body["service_token"].strip(), rotated_at=_now_iso())
+    if body.get("auth_mode") == "login" and state["credentials"][p["upstream_credential_id"]].get("type") != "login":
+        state["credentials"][p["upstream_credential_id"]].update(type="login", secret="", username="", cached={})
     policy_store.save(state)
     return JSONResponse({**_public_provider(p), "note": note})
 
@@ -642,6 +705,12 @@ def _publish_gate(state: dict, p: dict) -> None:
         raise ApiError(409, "network mode: record the allowlisted gateway address before publishing")
     if mode == "oauth" and not _oauth_ready(p):
         raise ApiError(409, "OAuth mode: set the authorization URL, token URL and client id (or use Discover) before publishing")
+    if mode == "login":
+        if not login_auth.ready(p):
+            raise ApiError(409, "login mode: set the login URL and the token field before publishing")
+        cred = state["credentials"].get(p["upstream_credential_id"], {})
+        if not login_auth.config(p)["per_user"] and not (cred.get("username") and cred.get("secret")):
+            raise ApiError(409, "login mode: set the service account's username and password, or switch to per-user sign-in")
 
 
 async def set_provider_status(request: Request):
@@ -693,8 +762,22 @@ async def _test_mcp_server(state: dict, p: dict) -> list[dict]:
             results.append({"check": "A linked account to test with", "path": "Connect account", "status": None, "ok": False,
                             "error": "no user has connected an account yet, so the server cannot be called"})
             return results
+    if p.get("auth_mode") == "login":
+        results.append({"check": "Login endpoint configured", "path": login_auth.config(p).get("url", ""), "status": None,
+                        "ok": login_auth.ready(p), "note": "login URL and token field set" if login_auth.ready(p)
+                        else "incomplete: fill the fields under Edit connection"})
+        if not login_auth.ready(p):
+            return results
+        try:
+            if not await login_auth.listing_token(state, p):
+                results.append({"check": "A signed-in account to test with", "path": "Connect account", "status": None, "ok": False,
+                                "error": "no service account and no connected user, so the server cannot be called"})
+                return results
+        except login_auth.LoginError as exc:
+            results.append({"check": "Sign-in", "path": login_auth.config(p)["url"], "status": None, "ok": False, "error": str(exc)[:160]})
+            return results
     try:
-        async with mcp_client(p["base_url"], _backend_headers(state, p)) as c:  # entering = initialize handshake
+        async with mcp_client(p["base_url"], await _backend_headers_for(state, p)) as c:  # entering = initialize handshake
             results.append({"check": "MCP server answers initialize", "path": p["base_url"], "status": "ok", "ok": True})
             listed = await c.list_tools()
             known = set(p["tools"])
@@ -760,6 +843,25 @@ async def test_provider(request: Request):
                             "note": "authorization URL, token URL and client id set" if _oauth_ready(p)
                             else "incomplete: fill the fields under Edit connection"})
             return JSONResponse({"provider": p["id"], "results": results, "ok": all(r["ok"] for r in results)})
+        elif mode == "login":
+            results.append({"check": "Protected endpoint rejects missing token", **anon, "ok": anon["status"] in (401, 403)})
+            cfg = login_auth.config(p)
+            results.append({"check": "Login endpoint configured", "path": cfg.get("url", ""), "status": None, "ok": login_auth.ready(p),
+                            "note": ("per-user sign-in: each caller's own credentials are used" if cfg["per_user"] else "service account shared by every caller")
+                            if login_auth.ready(p) else "incomplete: fill the fields under Edit connection"})
+            if login_auth.ready(p):
+                try:
+                    token = await login_auth.listing_token(state, p)
+                    if token:
+                        r = await client.get(probe_path, headers=login_auth.header_for(p, token))
+                        results.append({"check": "Protected endpoint accepts the sign-in token", "path": probe_path,
+                                        "status": r.status_code, "ok": r.status_code in (200, 404)})
+                    else:
+                        results.append({"check": "Sign-in", "path": cfg["url"], "status": None, "ok": False,
+                                        "error": "no service account and no connected user yet"})
+                except (login_auth.LoginError, httpx.HTTPError) as exc:
+                    results.append({"check": "Sign-in", "path": cfg["url"], "status": None, "ok": False, "error": str(exc)[:160]})
+            return JSONResponse({"provider": p["id"], "results": results, "ok": all(r["ok"] for r in results)})
         elif mode == "network":
             results.append({"check": "Anonymous call from the gateway host succeeds (network mode)", **anon,
                             "ok": anon["status"] == 200,
@@ -820,10 +922,8 @@ async def oauth_discover(request: Request):
                                   "Endpoints found." + ("" if cfg.get("client_id") else " The server offers no dynamic registration: enter the client id it gave you."))})
 
 
-async def oauth_start(request: Request):
-    """Begin linking one user's account: returns the URL to open."""
-    body = await request.json()
-    state = policy_store.load()
+def _link_user(request: Request, state: dict, body: dict) -> str:
+    """Whose account is being linked: a member's own, or the id an admin picked (added to the directory if new)."""
     user_id = _own_user_id(request) if _is_member(request) else (body.get("user_id") or "").strip()
     if not user_id:
         raise ApiError(400, "user_id is required: the Bizplay user whose account is being linked")
@@ -832,10 +932,18 @@ async def oauth_start(request: Request):
         user_id = re.sub(r"[^a-z0-9_-]", "", user_id.lower())
         if not user_id:
             raise ApiError(400, "user id: letters, digits, - or _")
-        u = {"id": user_id, "name": user_id, "email": "", "role": "employee", "company": "Bizplay Demo Co.", "groups": [],
+        u = {"id": user_id, "name": user_id, "email": "", "role": "employee", "company": policy_store.DEMO_CORP, "groups": [],
              "password": None, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         _apply_user_fields(u, {k: body[k] for k in ("name", "role", "company", "groups") if k in body}, state)
         state["users"][user_id] = u
+    return user_id
+
+
+async def oauth_start(request: Request):
+    """Begin linking one user's account: returns the URL to open."""
+    body = await request.json()
+    state = policy_store.load()
+    user_id = _link_user(request, state, body)
     p = _get_provider(state, request.path_params["pid"])
     if p.get("auth_mode") != "oauth":
         raise ApiError(409, "this backend is not in OAuth mode")
@@ -863,7 +971,7 @@ async def oauth_callback(request: Request):
     loaded = ""
     if provider.get("kind") == "mcp" and not provider.get("tools"):
         try:
-            fresh = await _tools_from_mcp_server(provider["base_url"], _backend_headers(state, provider, pending["user_id"]))
+            fresh = await _tools_from_mcp_server(provider["base_url"], await _backend_headers_for(state, provider, pending["user_id"]))
             _merge_tools(provider, fresh)
             loaded = f"&tools={len(fresh)}"
         except ApiError:
@@ -880,6 +988,35 @@ def _named(state: dict, rows: list[dict]) -> list[dict]:
         uid = r.get("user_id") or r.get("sub")
         r["user_name"] = users.get(uid, {}).get("name") or uid
     return rows
+
+
+async def login_connect(request: Request):
+    """Store a user's own username and password for a login-endpoint backend, after a real sign-in."""
+    body = await request.json()
+    state = policy_store.load()
+    user_id = _link_user(request, state, body)
+    p = _get_provider(state, request.path_params["pid"])
+    if p.get("auth_mode") != "login" or not login_auth.config(p)["per_user"]:
+        raise ApiError(409, "this backend does not take per-user sign-ins")
+    username, password = (body.get("username") or "").strip(), body.get("password") or ""
+    if not username or not password:
+        raise ApiError(400, "username and password are required")
+    try:
+        await login_auth.connect_user(state, p, user_id, username, password)
+    except login_auth.LoginError as exc:
+        raise ApiError(400, str(exc)) from None
+    loaded = ""
+    if p.get("kind") == "mcp" and not p.get("tools"):
+        try:
+            fresh = await _tools_from_mcp_server(p["base_url"], await _backend_headers_for(state, p, user_id))
+            _merge_tools(p, fresh)
+            loaded = f"; {len(fresh)} tools loaded from the server"
+        except ApiError:
+            pass
+    policy_store.save(state)
+    audit.record(user_id, f"login:{p['id']}", {}, "ok", "account connected", via="portal")
+    row = next(c for c in _named(state, oauth.public_connections(state, p["id"])) if c["user_id"] == user_id)
+    return JSONResponse({**row, "note": f"Signed in to {p['name']} as {username}{loaded}"}, status_code=201)
 
 
 async def list_connections(request: Request):
@@ -909,8 +1046,8 @@ async def refresh_tools(request: Request):
     p = _get_provider(state, request.path_params["pid"])
     if p.get("kind") != "mcp":
         raise ApiError(409, "only MCP backends can refresh their tool list; re-register a REST API with a new spec")
-    headers = _backend_headers(state, p, (body.get("user_id") or "").strip() or None)
-    if p.get("auth_mode") == "oauth" and not headers:
+    headers = await _backend_headers_for(state, p, (body.get("user_id") or "").strip() or None)
+    if p.get("auth_mode") in ("oauth", "login") and not headers:
         raise ApiError(409, "connect an account first: the server needs a user's token to list its tools")
     fresh = await _tools_from_mcp_server(p["base_url"], headers)
     _merge_tools(p, fresh)
@@ -1082,14 +1219,14 @@ async def issue_token(request: Request):
         user_id = re.sub(r"[^a-z0-9_-]", "", user_id.lower())
         if not user_id:
             raise ApiError(400, "user id: letters, digits, - or _")
-        user = {"id": user_id, "name": (body.get("name") or "").strip() or user_id, "email": "", "role": "employee", "company": "Bizplay Demo Co.",
+        user = {"id": user_id, "name": (body.get("name") or "").strip() or user_id, "email": "", "role": "employee", "company": policy_store.DEMO_CORP,
                 "groups": [], "password": None, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         state["users"][user_id] = user
     if explicit:
         _apply_user_fields(user, explicit, state)
     token, record = policy_store.issue_agent_token(
         state, label=(body.get("label") or "Untitled").strip(), user_id=user_id,
-        role=user["role"], company=user.get("company") or "Bizplay Demo Co.",
+        role=user["role"], company=user.get("company") or policy_store.DEMO_CORP,
         agent=body.get("agent") or "MCP client", ttl_days=ttl, created_by=request.state.user, groups=user.get("groups", []),
     )
     policy_store.save(state)
@@ -1111,7 +1248,8 @@ async def revoke_token(request: Request):
 # --- security -------------------------------------------------------------------
 async def security(request: Request):
     state = policy_store.load()
-    creds = [{**c, "secret": _mask(c["secret"]) if c["secret"] else "(not set)"} for c in state["credentials"].values()]
+    creds = [{**{k: v for k, v in c.items() if k != "cached"}, "secret": _mask(c["secret"]) if c["secret"] else "(not set)"}
+             for c in state["credentials"].values()]
     return JSONResponse({"settings": state["security"], "credentials": creds, "checklist": _security_checklist(state),
                          "identity": {p["id"]: p["identity"] for p in state["providers"].values()}})
 
@@ -1250,6 +1388,7 @@ app = Starlette(
         Route("/api/registry/{pid}/tools/{name}", update_tool, methods=["PUT"]),
         Route("/api/registry/{pid}/oauth/discover", oauth_discover, methods=["POST"]),
         Route("/api/registry/{pid}/oauth/start", oauth_start, methods=["POST"]),
+        Route("/api/registry/{pid}/login/connect", login_connect, methods=["POST"]),
         Route("/api/registry/{pid}/connections", list_connections),
         Route("/api/registry/{pid}/connections/{user_id}", delete_connection, methods=["DELETE"]),
         Route("/api/registry/{pid}/refresh-tools", refresh_tools, methods=["POST"]),

@@ -261,5 +261,6 @@ def public_connections(state: dict, provider_id: str) -> list[dict]:
         if record:
             out.append({"user_id": user_id, "connected_at": record["connected_at"], "expires_at": record.get("expires_at"),
                         "refreshed_at": record.get("refreshed_at"), "scope": record.get("scope", ""),
-                        "can_refresh": bool(record.get("refresh_token"))})
+                        "kind": record.get("type", "oauth"), "username": record.get("username"),
+                        "can_refresh": bool(record.get("refresh_token")) or record.get("type") == "login"})
     return sorted(out, key=lambda x: x["user_id"])

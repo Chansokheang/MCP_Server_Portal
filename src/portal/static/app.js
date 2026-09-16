@@ -105,7 +105,31 @@ const chip = (kind, text, icon) => `<span class="chip ${kind}">${icon ? `<i clas
 const tile = (icon, k, v, mono = false) => `<div class="tile"><span class="k"><i class="ph ph-${icon}"></i>${esc(k)}</span><span class="v ${mono ? "mono" : ""}">${esc(v)}</span></div>`;
 const LOGO_COLORS = ["green", "lilac", "amber", "dark", "red"];
 const logo = (name, i = 0) => `<span class="logo ${LOGO_COLORS[i % LOGO_COLORS.length]}">${esc(initials(name))}</span>`;
-const authChip = (m) => ({ bearer: chip("lilac", "Bearer", "key"), network: chip("amber", "Network", "shield-check"), open: chip("red", "Open", "warning"), oauth: chip("green", "OAuth per user", "user-circle") }[m] || chip("lilac", "Bearer", "key"));
+const authChip = (m) => ({ bearer: chip("lilac", "Bearer", "key"), network: chip("amber", "Network", "shield-check"), open: chip("red", "Open", "warning"), oauth: chip("green", "OAuth per user", "user-circle"), login: chip("green", "Login endpoint", "sign-in") }[m] || chip("lilac", "Bearer", "key"));
+// Fields for a backend with its own username-and-password login endpoint. Shared by the register and edit dialogs.
+const loginFields = (prefix, cfg = {}, sa = {}) => `
+  <div class="form-2">
+    <label class="field">Login URL <input name="login.url" value="${esc(cfg.url || "")}" placeholder="https://api.example.com/auth/login"></label>
+    <label class="field">Token field in the response <input name="login.token_path" value="${esc(cfg.token_path || "token")}" placeholder="data.accessToken"><span class="muted small">Dot path into the JSON answer.</span></label>
+  </div>
+  <label class="field">Request body <textarea name="login.body" rows="2" style="min-height:52px">${esc(cfg.body || '{"username": "{username}", "password": "{password}"}')}</textarea><span class="muted small">JSON sent to the login URL; {username} and {password} are filled in.</span></label>
+  <div class="form-2">
+    <label class="field">Expiry field (optional) <input name="login.expires_path" value="${esc(cfg.expires_path || "")}" placeholder="expiresIn (seconds)"></label>
+    <label class="field">Lifetime if no expiry field (minutes) <input name="login.ttl_minutes" type="number" min="1" value="${esc(cfg.ttl_minutes || 60)}"></label>
+    <label class="field">Send the token in header <input name="login.header" value="${esc(cfg.header || "Authorization")}" placeholder="Authorization"></label>
+    <label class="field">Scheme prefix <input name="login.scheme" value="${esc(cfg.scheme ?? "Bearer")}" placeholder="Bearer (empty for none)"></label>
+  </div>
+  <label class="field">Whose credentials
+    <select name="login.per_user" id="${prefix}-login-per-user">
+      <option value="false" ${cfg.per_user ? "" : "selected"}>Service account: one username and password shared by every caller</option>
+      <option value="true" ${cfg.per_user ? "selected" : ""}>Each user: people sign in with their own username and password</option>
+    </select></label>
+  <div class="form-2 ${cfg.per_user ? "hidden" : ""}" id="${prefix}-login-sa">
+    <label class="field">Service account username <input name="login_username" value="${esc(sa.username || "")}" placeholder="svc-gateway"></label>
+    <label class="field">Service account password <input name="login_password" type="password" placeholder="${sa.has_password ? "stored, leave blank to keep" : "stored, never shown again"}" autocomplete="new-password"></label>
+  </div>
+  <div class="callout"><i class="ph ph-info"></i><span>The gateway calls the login URL itself, caches the token, and signs in again when it expires or the API answers 401. With per-user credentials each person connects on their <strong>My access</strong> page and the API sees them, not a shared account.</span></div>`;
+const bindLoginFields = (prefix) => { const sel = $(`#${prefix}-login-per-user`); if (sel) sel.onchange = () => $(`#${prefix}-login-sa`).classList.toggle("hidden", sel.value === "true"); };
 // Fields for a backend whose users link their own accounts. Shared by the register and edit dialogs.
 const oauthFields = (prefix, cfg = {}) => `
   <div class="form-2">
@@ -117,11 +141,15 @@ const oauthFields = (prefix, cfg = {}) => `
     <label class="field">Resource (RFC 8707) <input name="oauth.resource" value="${esc(cfg.resource || "")}" placeholder="MCP servers: their own URL"></label>
   </div>
   <div class="callout"><i class="ph ph-info"></i><span>Register this redirect URL with the auth server: <span class="mono">${esc(SERVER.oauth_redirect_uri || (location.origin + "/oauth/callback"))}</span>. MCP servers that publish their auth metadata can fill all of this in with <strong>Discover</strong> on the provider page, and register the gateway as a client by themselves.</span></div>`;
-/** Pull "oauth.x" fields out of a form into {oauth: {x}}. */
+/** Pull "oauth.x" and "login.x" fields out of a form into {oauth: {x}, login: {x}}. */
 function splitOauth(f) {
-  const oauth = {};
-  for (const [k, v] of Object.entries(f)) if (k.startsWith("oauth.")) { oauth[k.slice(6)] = v; delete f[k]; }
-  return { ...f, oauth };
+  const oauth = {}, login = {};
+  for (const [k, v] of Object.entries(f)) {
+    if (k.startsWith("oauth.")) { oauth[k.slice(6)] = v; delete f[k]; }
+    if (k.startsWith("login.")) { login[k.slice(6)] = v; delete f[k]; }
+  }
+  if (!f.login_password) delete f.login_password;
+  return { ...f, oauth, login };
 }
 const kindChip = (k) => k === "mcp" ? chip("green", "MCP server", "plugs-connected") : chip("", "REST API", "cloud");
 const standaloneChip = (p) => p.standalone ? chip("green", "Deployed", "rocket-launch") : "";
@@ -406,7 +434,7 @@ pages.registry = async () => {
   $("#page").innerHTML = `
     <div class="filter-bar">
       <label>Type <select id="reg-filter-kind"><option value="">All</option><option value="openapi">REST API</option><option value="mcp">MCP server</option></select></label>
-      <label>Auth <select id="reg-filter-auth"><option value="">All</option><option value="bearer">Bearer</option><option value="oauth">OAuth per user</option><option value="network">Network</option><option value="open">Open</option></select></label>
+      <label>Auth <select id="reg-filter-auth"><option value="">All</option><option value="bearer">Bearer</option><option value="oauth">OAuth per user</option><option value="login">Login endpoint</option><option value="network">Network</option><option value="open">Open</option></select></label>
       <span class="grow"></span>
       <span class="muted small">${items.length} backend(s). Type in the search box above to filter by name, URL or owner.</span>
     </div>
@@ -622,10 +650,12 @@ async function registerDialog(opts = {}) {
           <option value="network">Network-isolated: no token, only the gateway's address can reach it</option>
           <option value="open">Open: anyone can call it (demo data only, recorded as accepted risk)</option>
           <option value="oauth">OAuth: each user links their own account; the gateway sends that user's token</option>
+          <option value="login">Login endpoint: it has its own username-and-password sign-in; the gateway signs in and sends the token</option>
         </select></label>
       <label class="field" id="reg-token-field">Service bearer token the gateway will send <input name="service_token" placeholder="issued by the provider (stored, never shown again)"></label>
       <label class="field hidden" id="reg-allowlist-field">Gateway address the API allows <input name="allowlist" placeholder="e.g. 203.0.113.10 or 10.0.0.0/24"></label>
       <div class="hidden" id="reg-oauth-fields">${oauthFields("reg")}</div>
+      <div class="hidden" id="reg-login-fields">${loginFields("reg")}</div>
       <div class="callout warn hidden" id="reg-open-warning"><i class="ph ph-warning"></i><span><strong>Open backend.</strong> The gateway still authenticates agents, applies tool policy, and limits results to the caller's company, but anyone who knows the URL can bypass it. The overview will show this as an accepted risk.</span></div>
       <label class="field" id="reg-spec-field">OpenAPI spec (JSON) <textarea name="spec" placeholder='{"openapi":"3.0.3","paths":{...}}' required></textarea></label>
       <div class="callout hidden" id="reg-mcp-note"><i class="ph ph-info"></i><span>The portal connects to the server now and reads its tool list. Tools marked read-only by the server start enabled; the rest start off and can be switched on under Access Control.</span></div>
@@ -653,7 +683,9 @@ async function registerDialog(opts = {}) {
     $("#reg-allowlist-field").classList.toggle("hidden", m !== "network");
     $("#reg-open-warning").classList.toggle("hidden", m !== "open");
     $("#reg-oauth-fields").classList.toggle("hidden", m !== "oauth");
+    $("#reg-login-fields").classList.toggle("hidden", m !== "login");
   };
+  bindLoginFields("reg");
   $("#reg-sample").onclick = async () => {
     const r = await fetch("/static/sample-openapi.json"); $("#reg-form [name=spec]").value = await r.text();
     $("#reg-form [name=name]").value ||= "Bizplay Expense API (copy)";
@@ -749,10 +781,12 @@ async function editDialog(p) {
           ${opt("network", "Network-isolated: no token, only the gateway's address can reach it")}
           ${opt("open", "Open: anyone can call it (demo data only, recorded as accepted risk)")}
           ${opt("oauth", "OAuth: each user links their own account; the gateway sends that user's token")}
+          ${opt("login", "Login endpoint: the gateway signs in with a username and password")}
         </select></label>
       <label class="field ${p.auth_mode === "bearer" ? "" : "hidden"}" id="ed-token-field">Service bearer token <input name="service_token" placeholder="leave blank to keep the stored one"></label>
       <label class="field ${p.auth_mode === "network" ? "" : "hidden"}" id="ed-allowlist-field">Gateway address the API allows <input name="allowlist" value="${esc(p.allowlist || "")}" placeholder="e.g. 203.0.113.10"></label>
       <div class="${p.auth_mode === "oauth" ? "" : "hidden"}" id="ed-oauth-fields">${oauthFields("ed", p.oauth || {})}</div>
+      <div class="${p.auth_mode === "login" ? "" : "hidden"}" id="ed-login-fields">${loginFields("ed", p.login || {}, p.service_account || {})}</div>
       <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="ed-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Save</button></div>
       <p class="error" id="ed-error"></p>
     </form>`);
@@ -761,7 +795,9 @@ async function editDialog(p) {
     $("#ed-token-field").classList.toggle("hidden", e.target.value !== "bearer");
     $("#ed-allowlist-field").classList.toggle("hidden", e.target.value !== "network");
     $("#ed-oauth-fields").classList.toggle("hidden", e.target.value !== "oauth");
+    $("#ed-login-fields").classList.toggle("hidden", e.target.value !== "login");
   };
+  bindLoginFields("ed");
   $("#ed-form").onsubmit = async (e) => {
     e.preventDefault(); const f = splitOauth(Object.fromEntries(new FormData(e.target)));
     try {
@@ -922,7 +958,7 @@ function bindUserPicker(users) {
     const v = $("#pick-user").value, u = users.find((x) => x.id === v);
     $("#pick-new").classList.toggle("hidden", v !== NEW_USER);
     $("#pick-new [name=new_id]").required = v === NEW_USER;
-    $("#pick-preview").innerHTML = u ? `${chip("", u.role, "identification-badge")}${chip("", u.company || "Bizplay Demo Co.", "buildings")}${(u.groups || []).length ? u.groups.map((g) => chip("lilac", g, "users-three")).join("") : chip("", "no groups", "users-three")}` : "";
+    $("#pick-preview").innerHTML = u ? `${chip("", u.role, "identification-badge")}${chip("", u.company || "1078836129", "buildings")}${(u.groups || []).length ? u.groups.map((g) => chip("lilac", g, "users-three")).join("") : chip("", "no groups", "users-three")}` : "";
   };
   $("#pick-user").onchange = show; show();
 }
@@ -1125,6 +1161,63 @@ async function connectDialog(p, after) {
   };
 }
 
+/** A user's own username and password for a login-endpoint backend. Proved with a real sign-in before it is stored. */
+async function loginConnectDialog(p, after) {
+  const me = session.user;
+  const users = isAdmin() ? (await api("GET", "/api/users")).items : [];
+  modal(`<h2><i class="ph ph-sign-in"></i> Connect an account on ${esc(p.name)}</h2>
+    <p class="muted">The gateway signs in at ${esc(hostOf(p.login?.url) || "the backend")} with these credentials, keeps them, and signs in again whenever the token expires. They are used only for ${isAdmin() ? "that user's" : "your"} own calls.</p>
+    <form id="lc-form" class="form">
+      ${isAdmin() ? userPicker(users, me.user_id || users[0]?.id) : `<div class="who-card"><span class="avatar">${esc(initials(me.name))}</span><div><div class="who-name">${esc(me.name)}</div><div class="who-meta">Connecting as <span class="mono">${esc(me.user_id)}</span>, the identity your agent tokens carry.</div></div></div>`}
+      <div class="form-2">
+        <label class="field">${esc(p.name)} username <input name="username" required autocomplete="off"></label>
+        <label class="field">${esc(p.name)} password <input name="password" type="password" required autocomplete="new-password"></label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="lc-cancel">Cancel</button><button class="btn solid" type="submit" id="lc-submit"><i class="ph ph-sign-in"></i> Sign in and connect</button></div>
+      <p class="error" id="lc-error"></p>
+    </form>`);
+  if (isAdmin()) bindUserPicker(users);
+  $("#lc-cancel").onclick = closeModal;
+  $("#lc-form").onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    const btn = $("#lc-submit"); btn.disabled = true;
+    try {
+      const r = await api("POST", `/api/registry/${p.id}/login/connect`, { username: f.username, password: f.password, ...(isAdmin() ? pickedUser(f) : {}) });
+      closeModal(); toast("Account connected", r.note, 5000); (after || pages.provider)();
+    } catch (err) { $("#lc-error").textContent = err.message; btn.disabled = false; }
+  };
+}
+
+/** The Sign-in card for a login-endpoint backend: how the gateway signs in, and as whom. */
+function loginCard(p, conns) {
+  const cfg = p.login || {}, sa = p.service_account || {};
+  const sent = `${cfg.header || "Authorization"}: ${cfg.scheme ? cfg.scheme + " " : ""}<token>`;
+  return `
+    <div class="card">
+      <div class="card-head">
+        <span class="card-brand"><span class="logo ${p.login_ready ? "green" : "amber"}"><i class="ph ph-sign-in"></i></span> Sign-in</span>
+        ${p.login_ready ? chip("green", "Login endpoint configured", "check") : chip("amber", "Login endpoint not configured", "warning")}
+      </div>
+      <div class="tiles" style="grid-template-columns:2fr 1fr 1fr 1fr">
+        ${tile("globe", "Login URL", cfg.url || "not set", true)}
+        ${tile("brackets-curly", "Token field", cfg.token_path || "token", true)}
+        ${tile("paper-plane-tilt", "Sent as", sent, true)}
+        ${tile(cfg.per_user ? "users" : "user-gear", "Credentials", cfg.per_user ? `Each user (${conns.length} connected)` : "Service account")}
+      </div>
+      <p class="card-desc" style="-webkit-line-clamp:4">${cfg.per_user
+        ? "Each person signs in with their own username and password for this backend, so it sees the real user. The gateway keeps the credentials, signs in when the token expires or the API answers 401, and never uses one person's sign-in for another."
+        : `The gateway signs in as <strong>${esc(sa.username || "(no username yet)")}</strong> and sends that token on every call, so this backend sees one shared identity. It signs in again when the token expires or the API answers 401.${sa.expires_at ? ` Token valid until ${esc(fmtTs(sa.expires_at))}.` : " Not signed in yet."}`}</p>
+      ${cfg.per_user ? (conns.length ? `<div class="table-wrap"><table><tr><th>User</th><th>Signs in as</th><th>Connected</th><th>Token expires</th><th></th></tr>
+        ${conns.map((c) => `<tr><td class="nowrap"><strong>${esc(c.user_name || c.user_id)}</strong><div class="sub mono">${esc(c.user_id)}</div></td><td class="mono small">${esc(c.username || "")}</td><td class="small">${esc(fmtTs(c.connected_at))}</td><td class="small">${c.expires_at ? esc(fmtTs(c.expires_at)) + " (auto sign-in)" : "never"}</td><td><button class="btn small danger" data-disconnect="${esc(c.user_id)}"><i class="ph ph-link-break"></i> Disconnect</button></td></tr>`).join("")}
+        </table></div>` : `<p class="muted small">No accounts connected yet.</p>`) : ""}
+      <div class="card-actions">
+        ${cfg.per_user ? `<button class="btn small solid" data-act="connect" ${p.login_ready ? "" : "disabled"}><i class="ph ph-sign-in"></i> Connect account</button>` : `<button class="btn small solid" data-act="test"><i class="ph ph-plugs"></i> Test sign-in</button>`}
+        <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit sign-in settings</button>
+        ${p.kind === "mcp" ? `<button class="btn small" data-act="refresh-tools"><i class="ph ph-arrows-clockwise"></i> Refresh tools</button>` : ""}
+      </div>
+    </div>`;
+}
+
 /** The Connected accounts card for an OAuth backend. */
 function connectionsCard(p, conns) {
   const cfg = p.oauth || {};
@@ -1164,7 +1257,7 @@ pages.provider = async () => {
     return;
   }
   const d = await api("GET", `/api/registry/${pid}/tools`);
-  const conns = p.auth_mode === "oauth" ? (await api("GET", `/api/registry/${pid}/connections`)).items : [];
+  const conns = p.per_user ? (await api("GET", `/api/registry/${pid}/connections`)).items : [];
   const enabled = d.items.filter((t) => t.enabled);
   const canDeploy = !!p.has_spec;  // an MCP-kind backend is already an MCP server
   $("#page-title").textContent = p.name;
@@ -1193,7 +1286,7 @@ pages.provider = async () => {
         ${tile("textbox", "Tool names on gateways", p.tool_prefix ? `${p.tool_prefix}*` : "no prefix")}
         ${tile("squares-four", "Served on", `${served.length} endpoint(s)`)}
       </div>
-      <p class="card-desc" style="-webkit-line-clamp:3">${p.kind === "mcp" ? "Tools proxied from the MCP server, unchanged" : `Spec from ${esc(p.spec_source)}`}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : p.auth_mode === "oauth" ? `Each caller's own linked account token is sent; ${conns.length} user(s) linked.` : "The gateway sends a stored service token on every call."}</p>
+      <p class="card-desc" style="-webkit-line-clamp:3">${p.kind === "mcp" ? "Tools proxied from the MCP server, unchanged" : `Spec from ${esc(p.spec_source)}`}. Registered by ${esc(p.owner)} on ${esc(fmtDate(p.created_at))}. ${p.auth_mode === "open" ? "The upstream accepts anonymous calls, so the gateway carries all the enforcement." : p.auth_mode === "network" ? `Reachable only from ${esc(p.allowlist || "the allowlisted gateway address")}.` : p.auth_mode === "oauth" ? `Each caller's own linked account token is sent; ${conns.length} user(s) linked.` : p.auth_mode === "login" ? (p.login?.per_user ? `The gateway signs in with each caller's own credentials; ${conns.length} user(s) connected.` : `The gateway signs in with a service account and sends the token it gets.`) : "The gateway sends a stored service token on every call."}</p>
       <div class="card-actions">
         <button class="btn small" data-act="edit"><i class="ph ph-pencil-simple"></i> Edit connection</button>
         <button class="btn small" data-act="test"><i class="ph ph-plugs"></i> Test connection</button>
@@ -1210,7 +1303,7 @@ pages.provider = async () => {
           : `<tr><td colspan="3">${emptyState("squares-four", "Not served anywhere yet", "Publish it to put it on the shared gateway, deploy it as its own MCP server, or add it to a named gateway.")}</td></tr>`}
       </table></div></div>
     </div>
-    ${p.auth_mode === "oauth" ? connectionsCard(p, conns) : ""}
+    ${p.auth_mode === "oauth" ? connectionsCard(p, conns) : p.auth_mode === "login" ? loginCard(p, conns) : ""}
     ${accessSection(p, d, known.items)}
     <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Connect instructions live on each endpoint's page under Served on.</span></div>`;
 
@@ -1225,7 +1318,7 @@ pages.provider = async () => {
     try {
       if (act === "edit") return editDialog(p);
       if (act === "test") return testDialog(pid);
-      if (act === "connect") return connectDialog(p);
+      if (act === "connect") return p.auth_mode === "login" ? loginConnectDialog(p) : connectDialog(p);
       if (act === "discover") {
         b.disabled = true;
         const r = await api("POST", `/api/registry/${pid}/oauth/discover`, {});
@@ -1435,11 +1528,11 @@ pages.security = async () => {
       <div class="table-card"><div class="table-wrap"><table>
         <tr><th>Credential</th><th>Backend</th><th>Secret</th><th>Rotated</th><th></th></tr>
         ${d.credentials.length ? d.credentials.map((c, n) => `<tr>
-          <td><span class="name">${logo(c.provider_id, n)} <span>${esc(c.label)}<div class="sub">${esc(c.type)} token the gateway sends</div></span></span></td>
+          <td><span class="name">${logo(c.provider_id, n)} <span>${esc(c.label)}<div class="sub">${c.type === "login" ? `signs in as ${esc(c.username || "(no username)")}` : `${esc(c.type)} token the gateway sends`}</div></span></span></td>
           <td class="mono">${esc(c.provider_id)}</td>
           <td class="mono">${esc(c.secret)}</td>
           <td>${c.rotated_at ? `${chip("green", "Rotated", "arrows-clockwise")}<div class="sub">${esc(fmtDate(c.rotated_at))}</div>` : chip("amber", "Never rotated", "clock")}</td>
-          <td class="actions"><button class="btn small" data-rotate="${esc(c.id)}"><i class="ph ph-arrows-clockwise"></i> Rotate</button></td>
+          <td class="actions">${c.type === "login" ? `<a class="btn small" href="#provider?p=${esc(c.provider_id)}"><i class="ph ph-pencil-simple"></i> Change on backend</a>` : `<button class="btn small" data-rotate="${esc(c.id)}"><i class="ph ph-arrows-clockwise"></i> Rotate</button>`}</td>
         </tr>`).join("") : `<tr><td colspan="5">${emptyState("key", "No upstream credentials", "Backends in bearer mode get one when they are registered.")}</td></tr>`}
       </table></div></div>
       <div class="callout"><i class="ph ph-info"></i><span>Secrets are masked here and never shown again after rotation. The mockup keeps them in a JSON file; production keeps them in a vault.</span></div>`,
@@ -1501,7 +1594,7 @@ async function userDialog(u) {
         <label class="field">Name <input name="name" value="${esc(u?.name || "")}" placeholder="Kim Minji" required></label>
         <label class="field">Email <input name="email" type="email" value="${esc(u?.email || "")}" placeholder="minji@bizplay.co.kr"></label>
         <label class="field">Role <select name="role"><option value="employee" ${u?.role === "employee" ? "selected" : ""}>employee</option><option value="manager" ${u?.role === "manager" ? "selected" : ""}>manager</option></select></label>
-        <label class="field">Company <input name="company" value="${esc(u?.company || "Bizplay Demo Co.")}"></label>
+        <label class="field">Company (corpNo) <input name="company" value="${esc(u?.company || "1078836129")}" placeholder="1078836129"><span class="muted small">The corp number the gateway limits this person's calls and results to.</span></label>
         <label class="field">Access groups <input name="groups" value="${esc((u?.groups || []).join(", "))}" placeholder="finance, hr (comma separated)"></label>
       </div>
       <label class="field">Portal password <input name="password" type="password" placeholder="${editing && u.can_sign_in ? "(unchanged)" : "leave empty: no portal sign-in"}" autocomplete="new-password" minlength="6"><span class="muted small">With a password the person signs in as a member and manages their own tokens and linked accounts.</span></label>
@@ -1531,7 +1624,7 @@ pages.me = async () => {
   if (hashParam("oauth_error")) { toast("Sign-in failed", hashParam("oauth_error"), 7000); setHash("me", {}); return; }
   const me = session.user;
   const [toks, reg, gws] = await Promise.all([api("GET", "/api/tokens"), api("GET", "/api/registry"), api("GET", "/api/gateways")]);
-  const oauthBackends = reg.items.filter((p) => p.auth_mode === "oauth");
+  const oauthBackends = reg.items.filter((p) => p.per_user);
   const conns = await Promise.all(oauthBackends.map((p) => api("GET", `/api/registry/${p.id}/connections`).then((c) => c.items[0] || null)));
   const alive = (t) => !t.revoked && t.expires_at > toks.now;
   const mine = toks.items.filter(alive);
@@ -1552,8 +1645,8 @@ pages.me = async () => {
       <div class="section-head"><h2 class="section-title">Connected accounts</h2><span class="muted small">Backends that need your own sign-in</span></div>
       <div class="card">
         ${oauthBackends.length ? oauthBackends.map((p, i) => `<div class="link-row">
-          <div><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub">${conns[i] ? `Linked ${esc(fmtTs(conns[i].connected_at))}${conns[i].expires_at ? `, token renews automatically` : ""}` : `Not linked: your calls to ${esc(p.name)} are refused until you sign in there`}</div></span></span></div>
-          <div>${conns[i] ? `${chip("green", "Linked", "check")} <button class="btn small danger" data-disconnect="${esc(p.id)}"><i class="ph ph-link-break"></i> Disconnect</button>` : `<button class="btn small solid" data-connect="${esc(p.id)}" ${p.oauth_ready ? "" : "disabled"}><i class="ph ph-user-circle-plus"></i> Connect</button>`}</div>
+          <div><span class="name">${logo(p.name, i)} <span>${esc(p.name)}<div class="sub">${conns[i] ? `${conns[i].kind === "login" ? `Signed in as ${esc(conns[i].username)}, ` : "Linked "}${esc(fmtTs(conns[i].connected_at))}${conns[i].expires_at ? `, token renews automatically` : ""}` : `Not connected: your calls to ${esc(p.name)} are refused until you ${p.auth_mode === "login" ? "sign in with your " + esc(p.name) + " username and password" : "sign in there"}`}</div></span></span></div>
+          <div>${conns[i] ? `${chip("green", "Linked", "check")} <button class="btn small danger" data-disconnect="${esc(p.id)}"><i class="ph ph-link-break"></i> Disconnect</button>` : `<button class="btn small solid" data-connect="${esc(p.id)}" ${(p.auth_mode === "login" ? p.login_ready : p.oauth_ready) ? "" : "disabled"}><i class="ph ph-${p.auth_mode === "login" ? "sign-in" : "user-circle-plus"}"></i> ${p.auth_mode === "login" ? "Sign in" : "Connect"}</button>`}</div>
         </div>`).join("") : `<p class="muted small" style="margin:0">No backend needs a personal sign-in.</p>`}
       </div>
     </div>
@@ -1570,7 +1663,7 @@ pages.me = async () => {
     if (!confirm("Revoke this token? The agent loses access immediately.")) return;
     try { await api("POST", `/api/tokens/${b.dataset.revoke}/revoke`); toast("Token revoked"); pages.me(); } catch (err) { toast("Revoke failed", err.message, 4500); }
   });
-  $("#page").querySelectorAll("[data-connect]").forEach((b) => b.onclick = () => connectDialog(reg.items.find((p) => p.id === b.dataset.connect), pages.me));
+  $("#page").querySelectorAll("[data-connect]").forEach((b) => b.onclick = () => { const p = reg.items.find((x) => x.id === b.dataset.connect); (p.auth_mode === "login" ? loginConnectDialog : connectDialog)(p, pages.me); });
   $("#page").querySelectorAll("[data-disconnect]").forEach((b) => b.onclick = async () => {
     if (!confirm("Disconnect this account? Your calls to it are refused until you link it again.")) return;
     try { await api("DELETE", `/api/registry/${b.dataset.disconnect}/connections/${me.user_id}`); toast("Account disconnected"); pages.me(); } catch (err) { toast("Disconnect failed", err.message, 4500); }

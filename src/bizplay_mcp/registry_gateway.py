@@ -45,7 +45,7 @@ from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
 from fastmcp.tools.base import ToolResult
 from mcp.types import ToolAnnotations
 
-from . import audit, oauth, policy_store, specs
+from . import login_auth, audit, oauth, policy_store, specs
 from .auth import claims_for, current_principal, touch_token
 
 TransportFactory = Callable[[dict], httpx2.AsyncBaseTransport | None]
@@ -58,6 +58,25 @@ async def _inject_user_token(request: httpx2.Request) -> None:
     token = oauth.upstream_token.get()
     if token:
         request.headers["Authorization"] = f"Bearer {token}"
+
+
+def _login_hooks(provider: dict) -> dict:
+    """httpx event hooks for a login-endpoint backend: send the token its way, forget it on 401."""
+    pid = provider["id"]
+
+    async def on_request(request: httpx2.Request) -> None:
+        token = oauth.upstream_token.get()
+        if token:
+            request.headers.update(login_auth.header_for(policy_store.load()["providers"].get(pid, provider), token))
+
+    async def on_response(response: httpx2.Response) -> None:
+        token = oauth.upstream_token.get()
+        if response.status_code == 401 and token:
+            state = policy_store.load()
+            if login_auth.invalidate(state, state["providers"].get(pid, provider), token):
+                policy_store.save(state)
+
+    return {"request": [on_request], "response": [on_response]}
 
 
 class ResilientProxyProvider(ProxyProvider):
@@ -220,6 +239,18 @@ class GovernanceMiddleware(Middleware):
                           f"Link it in the Bizplay MCP portal: open {provider['name']}, then Connect account.")
                 audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
                 raise ToolError(f"Account not connected: {reason}")
+        elif provider.get("auth_mode") == "login":
+            # Login-endpoint backends: the caller's own sign-in when per user, else the service account's.
+            try:
+                user_token = await login_auth.token_for(state, provider, principal.user_id)
+            except login_auth.LoginError as exc:
+                audit.record(principal.user_id, name, arguments, "error", f"sign-in failed: {exc}"[:200], via=via)
+                raise ToolError(f"{provider['name']}: sign-in failed ({exc})") from None
+            if not user_token:
+                reason = (f"user '{principal.user_id}' has not connected a {provider['name']} account. "
+                          f"Link it in the Bizplay MCP portal: My access, then Connect on {provider['name']}.")
+                audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
+                raise ToolError(f"Account not connected: {reason}")
 
         # Company scoping on inputs: a caller may only name their own company.
         # With no company on the caller (token requirement switched off) there is
@@ -315,9 +346,14 @@ class ProviderRegistry:
                 # The user's token for the call in flight; for listing tool metadata,
                 # any linked user's token will do (the list is not per user).
                 token = oauth.upstream_token.get()
-                if token is None and provider.get("auth_mode") == "oauth":
+                mode = provider.get("auth_mode")
+                if token is None and mode == "oauth":
                     token = oauth.any_token(policy_store.load(), pid)
-                return {**headers, "Authorization": f"Bearer {token}"} if token else dict(headers)
+                if not token:
+                    return dict(headers)
+                if mode == "login":
+                    return {**headers, **login_auth.header_for(provider, token)}
+                return {**headers, "Authorization": f"Bearer {token}"}
 
             if self.mcp_client_factory:
                 factory = lambda: self.mcp_client_factory(provider, call_headers())  # noqa: E731
@@ -326,10 +362,13 @@ class ProviderRegistry:
 
             async def prepare() -> str | None:
                 fresh = policy_store.load()
-                return await oauth.listing_token(fresh, fresh["providers"].get(pid, provider))
+                current = fresh["providers"].get(pid, provider)
+                if current.get("auth_mode") == "login":
+                    return await login_auth.listing_token(fresh, current)
+                return await oauth.listing_token(fresh, current)
 
             self.gateway.add_provider(
-                ResilientProxyProvider(factory, prepare=prepare if provider.get("auth_mode") == "oauth" else None), namespace=ns)
+                ResilientProxyProvider(factory, prepare=prepare if provider.get("auth_mode") in ("oauth", "login") else None), namespace=ns)
         else:
             # Older registrations stored raw operationIds; serve what FastMCP names.
             if specs.reconcile_tool_names(provider):
@@ -337,7 +376,7 @@ class ProviderRegistry:
             client = httpx2.AsyncClient(
                 base_url=provider["base_url"], headers=headers, timeout=30.0,
                 transport=self.transport_factory(provider) if self.transport_factory else None,
-                event_hooks={"request": [_inject_user_token]},
+                event_hooks=_login_hooks(provider) if provider.get("auth_mode") == "login" else {"request": [_inject_user_token]},
             )
             # validate_output=False: real-world specs often drift from real responses
             # (e.g. Spring's "200 OK" status enum vs an actual "OK"). A strict output

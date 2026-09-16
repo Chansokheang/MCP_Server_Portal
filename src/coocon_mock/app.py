@@ -11,8 +11,14 @@ what the gateway turns into tools, and what the model reads to choose one.
 Run:
     uv run coocon-mock --port 18096          # spec at /openapi.json, Swagger UI at /docs
 
-Set COOCON_API_TOKEN to require `Authorization: Bearer <token>` on /api/*,
-to exercise the gateway's bearer mode; unset, the API is open.
+Auth, chosen by COOCON_AUTH:
+    open   (default) anonymous calls allowed
+    token  /api/* needs `Authorization: Bearer $COOCON_API_TOKEN` (the gateway's bearer mode)
+    login  /api/* needs a token from `POST /auth/login` {"username", "password"}, the
+           gateway's login-endpoint mode. Users come from COOCON_LOGIN_USERS
+           ("minji:minji1234,junho:junho1234,svc:svc1234" by default); tokens
+           last COOCON_TOKEN_TTL seconds (3600). GET /api/v1/me says who you are.
+Setting COOCON_API_TOKEN alone still means token mode, as before.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ import argparse
 import hashlib
 import os
 import random
+import secrets
 from datetime import date, datetime, timedelta, timezone
 
 from starlette.applications import Starlette
@@ -92,14 +99,60 @@ def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
 
 
+SESSIONS: dict[str, dict] = {}  # login tokens -> {"username", "expires_at"}
+
+
+def auth_mode() -> str:
+    mode = os.environ.get("COOCON_AUTH", "").strip().lower()
+    if mode in ("open", "token", "login"):
+        return mode
+    return "token" if os.environ.get("COOCON_API_TOKEN") else "open"
+
+
+def login_users() -> dict[str, str]:
+    raw = os.environ.get("COOCON_LOGIN_USERS") or "minji:minji1234,junho:junho1234,svc:svc1234"
+    return dict(pair.split(":", 1) for pair in raw.split(",") if ":" in pair)
+
+
+def _bearer(request: Request) -> str:
+    scheme, _, presented = request.headers.get("authorization", "").partition(" ")
+    return presented.strip() if scheme.lower() == "bearer" else ""
+
+
 class OptionalBearer(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        token = os.environ.get("COOCON_API_TOKEN")
-        if token and request.url.path.startswith("/api/"):
-            scheme, _, presented = request.headers.get("authorization", "").partition(" ")
-            if scheme.lower() != "bearer" or presented.strip() != token:
-                return JSONResponse({"error": "bearer token required"}, status_code=401, headers={"WWW-Authenticate": 'Bearer realm="coocon"'})
+        if request.url.path.startswith("/api/"):
+            mode = auth_mode()
+            refused = JSONResponse({"error": "bearer token required"}, status_code=401, headers={"WWW-Authenticate": 'Bearer realm="coocon"'})
+            if mode == "token" and _bearer(request) != os.environ.get("COOCON_API_TOKEN"):
+                return refused
+            if mode == "login":
+                session = SESSIONS.get(_bearer(request))
+                if not session or session["expires_at"] < datetime.now(timezone.utc).timestamp():
+                    return refused
+                request.state.username = session["username"]
         return await call_next(request)
+
+
+async def login(request: Request):
+    """POST {"username", "password"} -> {"accessToken", "expiresIn", "username"}; wrong password -> 401."""
+    try:
+        body = await request.json()
+    except ValueError:
+        return _error(400, "JSON body expected")
+    username, password = str(body.get("username") or ""), str(body.get("password") or "")
+    if login_users().get(username) != password or not password:
+        return _error(401, "invalid username or password")
+    ttl = int(os.environ.get("COOCON_TOKEN_TTL") or 3600)
+    token = "ct_" + secrets.token_urlsafe(24)
+    SESSIONS[token] = {"username": username, "expires_at": datetime.now(timezone.utc).timestamp() + ttl}
+    return JSONResponse({"accessToken": token, "tokenType": "Bearer", "expiresIn": ttl, "username": username})
+
+
+async def me(request: Request):
+    username = getattr(request.state, "username", None)
+    return JSONResponse({"username": username or "anonymous", "authMode": auth_mode(),
+                         "note": "the identity the API sees on this call" if username else "no sign-in on this call (open or token mode)"})
 
 
 # --- handlers ---------------------------------------------------------------------------
@@ -202,8 +255,11 @@ def _param(name, where, desc, required=False, schema=None, example=None):
 OPENAPI = {
     "openapi": "3.0.3",
     "info": {"title": "COOCON Scraping API (mock)", "version": "1.0.0",
-             "description": "Project-based scraping of a company's financial data. A project belongs to one company (corpNo) and lists the sources it may scrape; a job scrapes one source for a date range and yields records."},
+             "description": "Project-based scraping of a company's financial data. A project belongs to one company (corpNo) and lists the sources it may scrape; a job scrapes one source for a date range and yields records. Sign in with POST /auth/login {username, password} and send the accessToken as a bearer (not part of this spec on purpose: the gateway does the sign-in)."},
     "paths": {
+        "/api/v1/me": {"get": {"operationId": "whoami", "summary": "Who the API thinks is calling",
+                               "description": "The signed-in username behind this call, or 'anonymous'. Useful to confirm which account the gateway signed in with.",
+                               "responses": {"200": {"description": "ok"}}}},
         "/api/v1/sources": {"get": {"operationId": "listSources", "summary": "List the data sources that can be scraped",
                                     "description": "The catalogue of sources (bank accounts, corporate cards, Hometax tax invoices, the four major insurances) with the kind of records each one yields. Use it to explain what a project can collect.",
                                     "responses": {"200": {"description": "ok"}}}},
@@ -275,6 +331,8 @@ app = Starlette(routes=[
     Route("/openapi.json", openapi),
     Route("/docs", swagger_ui),
     Route("/swagger-ui/index.html", swagger_ui),
+    Route("/auth/login", login, methods=["POST"]),
+    Route("/api/v1/me", me),
     Route("/api/v1/sources", list_sources),
     Route("/api/v1/projects", list_projects),
     Route("/api/v1/projects", create_project, methods=["POST"]),

@@ -97,8 +97,11 @@ services:
     command: ["coocon-mock", "--host", "0.0.0.0", "--port", "18096"]
     environment:
       <<: *public-env
-      # Set to require a bearer token on /api/* (to demo the gateway's bearer mode).
+      # open (default), token (needs COOCON_API_TOKEN), or login (POST /auth/login with
+      # COOCON_LOGIN_USERS, default minji:minji1234,junho:junho1234,svc:svc1234).
+      COOCON_AUTH: ${COOCON_AUTH:-open}
       COOCON_API_TOKEN: ${COOCON_API_TOKEN:-}
+      COOCON_LOGIN_USERS: ${COOCON_LOGIN_USERS:-}
     ports:
       - "${COOCON_PORT:-9016}:18096"
 

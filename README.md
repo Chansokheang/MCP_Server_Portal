@@ -189,6 +189,26 @@ Members cannot reach the admin pages, and the API refuses them anything but
 their own tokens and connections. Users without a password are managed by an
 admin. Removing a user revokes their tokens and drops their linked accounts.
 
+### Login-endpoint backends (username and password)
+
+Many internal APIs have no OAuth server, just `POST /login` that returns a
+token. Register those with auth mode **Login endpoint** and tell the gateway
+where to sign in (login URL), what to send (a JSON body template with
+`{username}` and `{password}`), where the token is in the answer (a dot path
+such as `data.accessToken`), how long it lives (an expiry field or a fixed
+lifetime), and how to present it on calls (header and scheme, `Authorization:
+Bearer` by default). The gateway signs in itself, caches the token, and signs
+in again when it expires or the API answers 401.
+
+Credentials come in two shapes: a **service account** (one username and
+password kept with the backend's upstream credential; every caller shares that
+identity) or **each user** (people sign in with their own username and password
+on **My access**, an admin can do it for them on the backend page, and the API
+sees the real person). The COOCON mock demonstrates it: start it with
+`COOCON_AUTH=login` and it wants a token from `POST /auth/login`
+(users `minji:minji1234`, `junho:junho1234`, `svc:svc1234`); its `whoami` tool
+then tells you which account the gateway signed in with.
+
 ### Bearer tokens everywhere
 
 Three separate bearer tokens, none of them visible to the AI model:

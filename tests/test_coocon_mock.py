@@ -55,7 +55,7 @@ async def test_coocon_through_the_gateway(admin, monkeypatch):
     gw = build_registry_gateway(transport_factory=lambda p: httpx2.ASGITransport(app=coocon))
     async with Client(FastMCPTransport(gw)) as m:
         names = {t.name for t in await m.list_tools() if t.name.startswith(f"{pid}_")}
-        assert names == {f"{pid}_{n}" for n in ("listSources", "listProjects", "getProject", "getProjectSummary", "listJobs", "getJob", "getJobRecords")}
+        assert names == {f"{pid}_{n}" for n in ("whoami", "listSources", "listProjects", "getProject", "getProjectSummary", "listJobs", "getJob", "getJobRecords")}
         got = (await m.call_tool(f"{pid}_listProjects", {"corpNo": "1078836129"})).structured_content
         assert [p["projectId"] for p in got["items"]] == ["prj-1001", "prj-1002"]
         with pytest.raises(ToolError, match="disabled"):
