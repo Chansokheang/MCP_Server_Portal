@@ -79,6 +79,22 @@ def _login_hooks(provider: dict) -> dict:
     return {"request": [on_request], "response": [on_response]}
 
 
+class UpstreamProxyClient(ProxyClient):
+    """A proxy client that never forwards the caller's own Authorization header upstream.
+
+    FastMCP's ProxyClient forwards the inbound Authorization header to the
+    backend by default. Here the inbound header is the gateway's agent token,
+    which means nothing to Flow or any other backend; the gateway decides what
+    goes upstream (the user's linked token, a service token, or nothing).
+    """
+
+    def __init__(self, transport, **kwargs) -> None:
+        super().__init__(transport, **kwargs)
+        from dataclasses import replace
+        from fastmcp.client.transports.base import TransportOptions
+        self._transport_options = replace(self._transport_options or TransportOptions(), forward_incoming_headers=False)
+
+
 class ResilientProxyProvider(ProxyProvider):
     """A proxied MCP server that cannot be reached lists no tools instead of failing the whole gateway.
 
@@ -358,7 +374,7 @@ class ProviderRegistry:
             if self.mcp_client_factory:
                 factory = lambda: self.mcp_client_factory(provider, call_headers())  # noqa: E731
             else:
-                factory = lambda: ProxyClient(specs.mcp_transport(provider["base_url"], call_headers()))  # noqa: E731
+                factory = lambda: UpstreamProxyClient(specs.mcp_transport(provider["base_url"], call_headers()))  # noqa: E731
 
             async def prepare() -> str | None:
                 fresh = policy_store.load()
