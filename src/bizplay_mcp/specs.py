@@ -71,6 +71,8 @@ def tools_from_spec(spec: dict) -> dict[str, dict]:
             "route": f"{route.method.upper()} {route.path}", "operation_id": route.operation_id or "",
             # What the model sees unless the portal overrides it (tool row "description").
             "generated": (tool.description or "").strip(),
+            # Parameter names, so the portal can offer to bind one to the caller's identity.
+            "params": sorted(((tool.parameters or {}).get("properties") or {}).keys()),
         }
     return tools
 
@@ -92,6 +94,9 @@ def reconcile_tool_names(provider: dict) -> list[tuple[str, str]]:
             # Rows from before the portal kept the generated text: fill it in so the admin sees it.
             if not provider["tools"][old].get("generated") and generated[old]["generated"]:
                 provider["tools"][old]["generated"] = generated[old]["generated"]
+                renames.append((old, old))
+            if "params" not in provider["tools"][old]:
+                provider["tools"][old]["params"] = generated[old]["params"]
                 renames.append((old, old))
             continue
         new = by_operation.get(old)
@@ -119,5 +124,6 @@ def tools_from_mcp(listed: list[Any]) -> dict[str, dict]:
             "confirm": kind == "write", "summary": (tool.description or "").strip().split("\n")[0][:160],
             "route": "MCP tool", "operation_id": tool.name,
             "generated": (tool.description or "").strip(),
+            "params": sorted(((getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {}).get("properties") or {}).keys()),
         }
     return tools

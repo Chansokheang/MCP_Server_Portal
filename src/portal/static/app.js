@@ -849,7 +849,37 @@ async function testDialog(id) {
 
 // ---- Access control ----
 /** Entitlement + tool policy for one backend, rendered inside its page. */
-function accessSection(p, d, known) {
+/** Notes for the model and parameters the gateway fills in from the caller: set once per backend, inherited by every gateway. */
+function guidanceSection(p, params) {
+  const bound = params.items.filter((x) => x.bound).length;
+  const srcOpt = (item) => `<option value="">Asked from the model</option>${Object.entries(params.sources).map(([k, label]) => `<option value="${esc(k)}" ${item.bound === k ? "selected" : ""}>Filled with ${esc(label)}</option>`).join("")}`;
+  const worth = params.items.filter((x) => x.bound || x.suggested);
+  const rest = params.items.filter((x) => !x.bound && !x.suggested);
+  const row = (x) => `<tr data-param="${esc(x.name)}"><td class="mono">${esc(x.name)}</td><td class="small">${x.tools} tool(s)</td>
+    <td><select data-k="source" aria-label="Where ${esc(x.name)} comes from">${srcOpt(x)}</select></td>
+    <td class="small muted">${x.bound ? "Hidden from the model, filled on every call" : x.suggested ? `Looks like ${esc(params.sources[x.suggested])}` : ""}</td></tr>`;
+  return `
+    <div id="guidance">
+      <div class="section-head"><h2 class="section-title">Guidance for the model</h2>${p.instructions ? chip("green", "Usage notes set", "check") : chip("amber", "No usage notes", "warning")}${bound ? chip("lilac", `${bound} parameter(s) filled in`, "user-check") : ""}</div>
+      <div class="card settings-list">
+        <div class="setting" style="align-items:start"><div class="setting-text"><strong>How to use this backend</strong><p class="muted small">Sent to the model when it connects, on every gateway that serves this backend. Say which tool to call first and which next, in plain steps, and what never to ask the user for.</p></div>
+          <div class="setting-ctl" style="flex:1 1 420px"><textarea id="gd-notes" rows="5" style="width:100%;min-height:110px" placeholder="To answer a policy question: 1) listBots to find the company's bots, 2) askBot with the botId. Never ask the user for a botId or a company number.">${esc(p.instructions || "")}</textarea></div></div>
+        <div class="setting" style="align-items:start"><div class="setting-text"><strong>Parameters filled in from the caller</strong><p class="muted small">A parameter bound to the caller's identity disappears from the tools and is filled in by the gateway, whatever the model sends. The model can no longer pick the wrong company or person.</p></div>
+          <div class="setting-ctl" style="flex:1 1 420px">
+            ${params.needs_refresh ? `<p class="muted small" style="margin:0">Refresh tools once to read this server's parameter names.</p>` : `<div class="table-wrap"><table>
+              <tr><th>Parameter</th><th>Used by</th><th>Value</th><th></th></tr>
+              ${worth.map(row).join("")}
+              ${rest.length ? `<tr><td colspan="4"><details><summary class="muted small" style="cursor:pointer">${rest.length} other parameter(s)</summary><table style="margin-top:6px">${rest.map(row).join("")}</table></details></td></tr>` : ""}
+              ${params.items.length ? "" : `<tr><td colspan="4" class="muted small">This backend's tools take no parameters.</td></tr>`}
+            </table></div>`}
+          </div></div>
+        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next connection. A caller with no token has no identity to fill in, so they keep seeing the parameter.</p></div>
+          <div class="setting-ctl"><button class="btn solid small" id="gd-save"><i class="ph ph-check"></i> Save guidance</button></div></div>
+      </div>
+    </div>`;
+}
+
+function accessSection(p, d, known, params) {
   const access = p.access || { mode: "everyone", groups: [], companies: [] };
   const whoLabel = access.mode === "groups" ? `groups: ${access.groups.join(", ")}` : access.mode === "companies" ? `companies: ${access.companies.join(", ")}` : "everyone with a token";
   return `
@@ -870,11 +900,12 @@ function accessSection(p, d, known) {
           <div class="setting-ctl"><button class="btn solid small" id="acc-save"><i class="ph ph-check"></i> Save entitlement</button></div></div>
       </div>
     </div>
+    ${params ? guidanceSection(p, params) : ""}
     <div>
       <div class="section-head"><h2 class="section-title">Tool policy</h2><span class="muted small">${d.items.filter((t) => t.enabled).length} of ${d.items.length} enabled</span></div>
       <div class="table-card"><div class="table-wrap"><table><tr><th>Tool</th><th>Kind</th><th>Enabled</th><th>Allowed roles</th><th>Only these groups</th><th>Confirm before call</th></tr>
       ${d.items.map((t) => `<tr data-name="${esc(t.name)}">
-        <td class="tool"><span class="mono">${esc(t.name)}</span>${t.route ? `<div class="muted small mono">${esc(t.route)}</div>` : ""}
+        <td class="tool"><input data-k="alias" class="mono tool-alias" value="${esc(t.alias || "")}" placeholder="${esc(t.name)}" aria-label="Tool name the agent calls" title="The name clients see. Blank keeps ${esc(t.name)}">${t.alias ? `<div class="muted small mono">was ${esc(t.name)}</div>` : ""}${t.route ? `<div class="muted small mono">${esc(t.route)}</div>` : ""}
           <input data-k="description" class="desc" value="${esc(t.description || "")}" placeholder="${esc(t.generated || t.summary || "Describe what this tool does, for the model")}" aria-label="Description the model sees" title="What the model reads when choosing a tool. Blank keeps the text from the spec or server: ${esc(t.generated || t.summary || "(none)")}"></td>
         <td>${t.kind === "write" ? chip("amber", "write", "pencil-simple") : chip("lilac", "read", "eye")}</td>
         <td><input type="checkbox" class="switch" data-k="enabled" ${t.enabled ? "checked" : ""} aria-label="Enabled"></td>
@@ -898,6 +929,15 @@ function bindAccess(pid, reload) {
       reload();
     } catch (err) { toast("Save failed", err.message, 4500); }
   };
+  if ($("#gd-save")) $("#gd-save").onclick = async () => {
+    const bound_params = {};
+    $("#page").querySelectorAll("tr[data-param]").forEach((tr) => { const v = tr.querySelector("[data-k=source]").value; if (v) bound_params[tr.dataset.param] = v; });
+    try {
+      const r = await api("PATCH", `/api/registry/${pid}`, { instructions: $("#gd-notes").value, bound_params });
+      const n = Object.keys(r.bound_params || {}).length;
+      toast("Guidance saved", `${r.instructions ? "Usage notes set" : "No usage notes"}; ${n} parameter(s) filled in from the caller`); reload();
+    } catch (err) { toast("Save failed", err.message, 4500); }
+  };
   $("#page").querySelectorAll("tr[data-name] input").forEach((inp) => inp.onchange = async () => {
     const tr = inp.closest("tr"); const name = tr.dataset.name;
     const body = {
@@ -906,8 +946,9 @@ function bindAccess(pid, reload) {
       roles: [...tr.querySelectorAll('[data-k=role]:checked')].map((x) => x.value),
       groups: tr.querySelector('[data-k=groups]').value,
       description: tr.querySelector('[data-k=description]').value,
+      alias: tr.querySelector('[data-k=alias]').value,
     };
-    try { await api("PUT", `/api/registry/${pid}/tools/${name}`, body); toast("Policy saved", name); }
+    try { await api("PUT", `/api/registry/${pid}/tools/${name}`, body); toast("Policy saved", body.alias ? `${name} is now ${body.alias}` : name); if (inp.dataset.k === "alias") reload(); }
     catch (err) { toast("Save failed", err.message, 4500); }
   });
 }
@@ -1280,7 +1321,7 @@ pages.provider = async () => {
     $("#page").innerHTML = notFoundPage("Backend", "#registry", "All backends");
     return;
   }
-  const d = await api("GET", `/api/registry/${pid}/tools`);
+  const [d, params] = await Promise.all([api("GET", `/api/registry/${pid}/tools`), api("GET", `/api/registry/${pid}/params`)]);
   const conns = p.per_user ? (await api("GET", `/api/registry/${pid}/connections`)).items : [];
   const enabled = d.items.filter((t) => t.enabled);
   const canDeploy = !!p.has_spec;  // an MCP-kind backend is already an MCP server
@@ -1328,7 +1369,7 @@ pages.provider = async () => {
       </table></div></div>
     </div>
     ${p.auth_mode === "oauth" ? connectionsCard(p, conns) : p.auth_mode === "login" ? loginCard(p, conns) : ""}
-    ${accessSection(p, d, known.items)}
+    ${accessSection(p, d, known.items, params)}
     <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Connect instructions live on each endpoint's page under Served on.</span></div>`;
 
   bindAccess(pid, pages.provider);
@@ -1389,6 +1430,10 @@ pages.gateway = async () => {
   const drafts = ep.backends.filter((p) => p.status !== "published");
   const settingsKey = ep.id || "_shared";
   const [es, known] = await Promise.all([api("GET", `/api/endpoints/${settingsKey}/settings`), api("GET", "/api/groups")]);
+  const previewAs = hashParam("as") || "";
+  const [told, people] = await Promise.all([
+    api("GET", `/api/endpoints/${settingsKey}/instructions${previewAs ? `?as=${encodeURIComponent(previewAs)}` : ""}`).catch(() => ({ text: "", backends: [] })),
+    isAdmin() ? api("GET", "/api/users").then((u) => u.items).catch(() => []) : Promise.resolve([])]);
   const via = { url: ep.url, prefix: "", standalone: ep.standalone, label: ep.name, needsToken: es.require_token };
   const guides = clientGuides({ id: ep.id || "bizplay-gateway", name: ep.name, has_spec: true, kind: "openapi", tool_prefix: "" }, tools, via);
   const key = guides[hashParam("c")] ? hashParam("c") : "claude-desktop";
@@ -1441,10 +1486,20 @@ pages.gateway = async () => {
           <div class="setting-ctl"><input id="es-groups" class="ctl-wide" value="${esc(es.access.groups.join(", "))}" placeholder="finance, hr"></div></div>
         <div class="setting ${es.access.mode === "companies" ? "" : "hidden"}" id="es-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids from the caller's token.</p></div>
           <div class="setting-ctl"><input id="es-companies" class="ctl-wide" value="${esc(es.access.companies.join(", "))}" placeholder="1078836129"></div></div>
+        <div class="setting" style="align-items:start"><div class="setting-text"><strong>Instructions for the model</strong><p class="muted small">The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are added underneath.</p></div>
+          <div class="setting-ctl" style="flex:1 1 420px"><textarea id="es-instructions" rows="3" style="width:100%;min-height:72px" placeholder="You are the finance help desk. Use FLOW for project questions and the chatbot for company policy.">${esc(es.instructions || "")}</textarea></div></div>
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Token lifetime, the public address and upstream credentials stay on the Security page; they are not per gateway.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
       </div>
     </div>` : ""}
+    <div id="told">
+      <div class="section-head"><h2 class="section-title">What the model is told</h2>
+        ${isAdmin() ? `<label class="muted small" style="display:flex;align-items:center;gap:8px">Preview as <select id="told-as"><option value="">a caller with no token</option>${people.map((u) => `<option value="${esc(u.id)}" ${u.id === previewAs ? "selected" : ""}>${esc(u.name)} · ${esc(u.id)}</option>`).join("")}</select></label>` : ""}</div>
+      <div class="card">
+        ${told.text ? `<pre class="told">${esc(told.text)}</pre>` : emptyState("chat-text", "Nothing yet", "Add instructions above, or usage notes on a backend's page. Without them a model has only tool names and descriptions to go on.")}
+        ${(told.backends || []).length ? `<p class="muted small" style="margin:10px 0 0">${told.backends.map((b) => `<a href="#provider?p=${esc(b.id)}">${esc(b.name)}</a>: ${b.has_notes ? "usage notes" : "<strong>no usage notes</strong>"}${Object.keys(b.bound).length ? `, fills in ${esc(Object.keys(b.bound).join(", "))}` : ""}`).join(" · ")}</p>` : ""}
+      </div>
+    </div>
     <div>
       <div class="section-head"><h2 class="section-title">How to connect</h2>${es.require_token ? chip("green", "Agent token required", "key") : chip("amber", "No token: every caller is the demo user", "warning")}</div>
       <div class="card" style="margin-bottom:12px">
@@ -1473,11 +1528,13 @@ pages.gateway = async () => {
     $("#es-groups-row").classList.toggle("hidden", e.target.value !== "groups");
     $("#es-companies-row").classList.toggle("hidden", e.target.value !== "companies");
   };
+  if ($("#told-as")) $("#told-as").onchange = (e) => { const q = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")); if (e.target.value) q.as = e.target.value; else delete q.as; setHash("gateway", q); pages.gateway(); };
   if ($("#es-save")) $("#es-save").onclick = async () => {
     try {
       const v = $("#es-require").value;
       const r = await api("PUT", `/api/endpoints/${settingsKey}/settings`, { require_token: v === "inherit" ? null : v === "true",
-        access: { mode: $("#es-mode").value, groups: $("#es-groups").value, companies: $("#es-companies").value } });
+        access: { mode: $("#es-mode").value, groups: $("#es-groups").value, companies: $("#es-companies").value },
+        instructions: $("#es-instructions").value });
       toast("Gateway settings saved", `${r.require_token ? "Token required" : "No token required"}; applies on the next request`); pages.gateway();
     } catch (err) { toast("Save failed", err.message, 4500); }
   };

@@ -45,7 +45,7 @@ from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
 from fastmcp.tools.base import ToolResult
 from mcp.types import ToolAnnotations
 
-from . import login_auth, audit, oauth, policy_store, specs
+from . import guidance, login_auth, audit, oauth, policy_store, specs
 from .auth import claims_for, current_principal, touch_token
 
 TransportFactory = Callable[[dict], httpx2.AsyncBaseTransport | None]
@@ -193,9 +193,18 @@ class GovernanceMiddleware(Middleware):
             allowed, _ = policy_store.check_tool_access(state, parts[0], parts[1], role, principal.claims)
             if not allowed:
                 continue
-            update: dict[str, Any] = {"name": parts[1]} if only else {}
+            provider = state["providers"][parts[0]]
+            policy = provider["tools"][parts[1]]
+            # Clients see the name chosen in the portal, prefixed like any other (plain on a standalone endpoint).
+            shown = policy.get("alias") or parts[1]
+            update: dict[str, Any] = {"name": shown} if only else ({"name": tool.name[: len(tool.name) - len(parts[1])] + shown} if shown != parts[1] else {})
+            # Parameters bound to the caller's identity are filled in by the gateway, so the model never sees them.
+            bound = guidance.bound_values(provider, principal.user_id, principal.claims, principal.source)
+            if bound:
+                slim = guidance.strip_params(tool.parameters, set(bound))
+                if slim is not tool.parameters:
+                    update["parameters"] = slim
             # Tell clients (and any gateway proxying this one) which tools only read.
-            policy = state["providers"][parts[0]]["tools"][parts[1]]
             if policy["kind"] == "read" and tool.annotations is None:
                 update["annotations"] = ToolAnnotations(read_only_hint=True)
             # A description written in the portal replaces whatever the spec or server said.
@@ -203,6 +212,35 @@ class GovernanceMiddleware(Middleware):
                 update["description"] = policy["description"]
             visible.append(tool.model_copy(update=update) if update else tool)
         return visible
+
+    def _instructions(self) -> str:
+        """What the model is told about this endpoint, for this caller. Never raises: guidance is a help."""
+        try:
+            self.registry.sync()
+            principal = current_principal()
+            key = standalone_provider() or _request_state().get("gateway_key") or ""
+            return guidance.compose_instructions(policy_store.load(), key, principal.user_id, principal.claims, principal.source)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    async def on_initialize(self, context: MiddlewareContext, call_next):
+        """Handshake-era clients (claude.ai, ChatGPT today) read instructions from the initialize result."""
+        result = await call_next(context)
+        text = self._instructions() if result is not None else ""
+        if text:
+            result.instructions = text
+        return result
+
+    async def on_discover(self, context: MiddlewareContext, call_next):
+        """Newer clients connect with server/discover instead; the same text goes there."""
+        result = await call_next(context)
+        text = self._instructions()
+        if text:
+            if isinstance(result, dict):
+                result = {**result, "instructions": text}
+            elif result is not None:
+                result.instructions = text
+        return result
 
     async def on_call_tool(self, context: MiddlewareContext, call_next) -> ToolResult:
         self.registry.sync()
@@ -229,6 +267,13 @@ class GovernanceMiddleware(Middleware):
         if parts is None:
             return await call_next(context)
         pid, op = parts
+        # A name chosen in the portal maps back to the tool FastMCP serves.
+        known = policy_store.load()["providers"].get(pid)
+        if known is not None:
+            real = guidance.real_tool_name(known, op)
+            if real != op:
+                name, op = name[: len(name) - len(op)] + real, real
+                context = context.copy(message=context.message.model_copy(update={"name": name}))
         scope = gateway_scope()
         if scope is not None and pid not in scope:
             reason = f"'{name}' is not part of this gateway"
@@ -241,8 +286,16 @@ class GovernanceMiddleware(Middleware):
             audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
             raise ToolError(f"Access denied: {reason}")
 
-        # OAuth backends get the calling user's own token, never a shared one.
+        # Identity-bound parameters: whatever the model sent, the caller's own value goes upstream.
         provider = state["providers"][pid]
+        bound = guidance.bound_values(provider, principal.user_id, principal.claims, principal.source)
+        takes = set((provider["tools"].get(op) or {}).get("params") or [])
+        fill = {k: v for k, v in bound.items() if k in takes}
+        if fill and any(arguments.get(k) != v for k, v in fill.items()):
+            arguments.update(fill)
+            context = context.copy(message=context.message.model_copy(update={"arguments": arguments}))
+
+        # OAuth backends get the calling user's own token, never a shared one.
         user_token = None
         if provider.get("auth_mode") == "oauth":
             try:
@@ -473,7 +526,7 @@ class RegistryASGI:
                 if p and p.get("status") == "published" and p.get("standalone"):
                     extra = {"standalone": key}
                 elif g:
-                    extra = {"gateway_providers": list(g.get("providers") or [])}
+                    extra = {"gateway_providers": list(g.get("providers") or []), "gateway_key": key}
                 else:
                     message = (f"Nothing is served at /mcp/{key}. It is neither a deployed MCP server "
                                "nor a named gateway; use /mcp for everything.")

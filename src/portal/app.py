@@ -34,7 +34,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from bizplay_mcp import login_auth, audit, oauth, policy_store, specs
+from bizplay_mcp import guidance, login_auth, audit, oauth, policy_store, specs
 from bizplay_mcp.registry_gateway import build_registry_asgi
 from portal import gateway_oauth
 
@@ -387,6 +387,8 @@ def _public_provider(p: dict) -> dict:
         out["service_account"] = {"username": cred.get("username") or "", "has_password": bool(cred.get("secret")),
                                   "signed_in_at": cached.get("signed_in_at"), "expires_at": cached.get("expires_at")}
     out["has_spec"] = bool(p.get("spec"))
+    out["instructions"] = p.get("instructions") or ""
+    out["bound_params"] = p.get("bound_params") or {}
     out["standalone_url"] = policy_store.standalone_url(p)
     out["tool_count"] = len(p["tools"])
     out["tools_enabled"] = sum(t["enabled"] for t in p["tools"].values())
@@ -657,6 +659,10 @@ async def update_provider(request: Request):
             cred["secret"] = body["login_password"]
     if "access" in body and isinstance(body["access"], dict):
         p["access"] = _access_config(body["access"])
+    if "instructions" in body:
+        p["instructions"] = guidance.clean_instructions(body["instructions"])
+    if "bound_params" in body:
+        p["bound_params"] = guidance.parse_bindings(body["bound_params"])
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
         # One gateway, one public address: remember it for the next registration.
@@ -1134,7 +1140,8 @@ def _endpoint_key(request: Request) -> str:
 
 def _endpoint_public(state: dict, key: str) -> dict:
     own = state["endpoint_settings"].get(key) or {}
-    return {"key": key or "_shared", "require_token": own.get("require_token"), **policy_store.endpoint_policy(state, key)}
+    return {"key": key or "_shared", "require_token": own.get("require_token"), "instructions": own.get("instructions") or "",
+            **policy_store.endpoint_policy(state, key)}
 
 
 async def get_endpoint_settings(request: Request):
@@ -1156,6 +1163,8 @@ async def put_endpoint_settings(request: Request):
         own["require_token"] = None if body["require_token"] in (None, "", "inherit") else bool(body["require_token"])
     if "access" in body and isinstance(body["access"], dict):
         own["access"] = _access_config(body["access"])
+    if "instructions" in body:
+        own["instructions"] = guidance.clean_instructions(body["instructions"])
     state["endpoint_settings"][key] = own
     policy_store.save(state)
     return JSONResponse(_endpoint_public(state, key))
@@ -1187,8 +1196,49 @@ async def update_tool(request: Request):
         tool["groups"] = _listed(body["groups"])
     if "description" in body:
         tool["description"] = " ".join(str(body["description"]).split())[:600]
+    if "alias" in body:
+        alias = str(body["alias"] or "").strip()
+        if alias and alias != name:
+            problem = guidance.alias_problem(p, name, alias)
+            if problem:
+                raise ApiError(400, problem)
+            tool["alias"] = alias
+        else:
+            tool.pop("alias", None)
     policy_store.save(state)
     return JSONResponse({"name": name, **tool})
+
+
+async def provider_params(request: Request):
+    """The parameter names this backend's tools take, with how many tools use each and what it is bound to."""
+    state = policy_store.load()
+    p = _get_provider(state, request.path_params["pid"])
+    if p.get("spec") and any("params" not in row for row in p["tools"].values()):
+        if specs.reconcile_tool_names(p):  # older rows: read the parameter names off the spec once
+            policy_store.save(state)
+    counts: dict[str, int] = {}
+    for row in p["tools"].values():
+        for name in row.get("params") or []:
+            counts[name] = counts.get(name, 0) + 1
+    bound = p.get("bound_params") or {}
+    items = [{"name": n, "tools": c, "bound": bound.get(n), "suggested": guidance.suggested_source(n)} for n, c in counts.items()]
+    items.sort(key=lambda i: (i["bound"] is None, i["suggested"] is None, -i["tools"], i["name"]))
+    return JSONResponse({"items": items, "sources": guidance.SOURCES,
+                         "unknown": sorted(set(bound) - set(counts)), "needs_refresh": p.get("kind") == "mcp" and not counts})
+
+
+async def endpoint_instructions(request: Request):
+    """What a model is told when it connects to this endpoint, optionally as one directory user."""
+    state = policy_store.load()
+    key = "" if request.path_params["key"] == "_shared" else request.path_params["key"]
+    if key and key not in state["gateways"] and not state["providers"].get(key, {}).get("standalone"):
+        raise ApiError(404, "unknown endpoint")
+    user = state["users"].get(request.query_params.get("as") or "")
+    claims = {"company": user.get("company"), "role": user.get("role"), "groups": user.get("groups", [])} if user else None
+    text = guidance.compose_instructions(state, key, user["id"] if user else "", claims, "bearer" if user else "env")
+    return JSONResponse({"key": key, "as": user["id"] if user else None, "text": text,
+                         "backends": [{"id": b["id"], "name": b["name"], "has_notes": bool(b.get("instructions")),
+                                       "bound": b.get("bound_params") or {}} for b in guidance.backends_for(state, key)]})
 
 
 # --- agent tokens ---------------------------------------------------------------
@@ -1397,6 +1447,7 @@ app = Starlette(
         Route("/api/registry/{pid}", update_provider, methods=["PATCH"]),
         Route("/api/registry/{pid}", delete_provider, methods=["DELETE"]),
         Route("/api/registry/{pid}/test", test_provider, methods=["POST"]),
+        Route("/api/registry/{pid}/params", provider_params),
         Route("/api/registry/{pid}/tools", list_tools),
         Route("/api/registry/{pid}/tools/{name}", update_tool, methods=["PUT"]),
         Route("/api/registry/{pid}/oauth/discover", oauth_discover, methods=["POST"]),
@@ -1408,6 +1459,7 @@ app = Starlette(
         Route("/api/registry/{pid}/{action}", set_provider_status, methods=["POST"]),
         Route("/oauth/callback", oauth_callback),
         Route("/api/groups", list_groups),
+        Route("/api/endpoints/{key}/instructions", endpoint_instructions),
         Route("/api/endpoints/{key}/settings", get_endpoint_settings),
         Route("/api/endpoints/{key}/settings", put_endpoint_settings, methods=["PUT"]),
         Route("/api/gateways", list_gateways),

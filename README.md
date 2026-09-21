@@ -173,6 +173,28 @@ token and register it in bearer mode instead. A useful multi-step prompt:
 "For company 1078836129, scrape Hometax for the first half of September and
 total the VAT."
 
+### Helping the model find its way: instructions, filled-in parameters, tool names
+
+A model facing sixty tools with names like `get_2` and `list_3` guesses, and
+asks the user for ids it could have looked up. Three settings fix that, all
+kept **per backend** so every gateway that serves the backend inherits them:
+
+- **Usage notes** on the backend page ("How to use this backend"): which tool
+  to call first and which next. The gateway sends them as MCP `instructions`
+  when a client connects (on `initialize` and on `server/discover`). An
+  endpoint's text is its own opening lines from the gateway page, then the
+  notes of each backend it serves that this caller is entitled to. The
+  gateway page previews the exact text, as any directory user.
+- **Parameters filled in from the caller.** Bind a parameter such as `corpNo`
+  or `employeeId` to the caller's company, user id or role. It disappears
+  from the tools' schemas and the gateway fills it in on every call,
+  replacing whatever the model sent. The portal suggests bindings by name
+  and never applies one by itself. A caller with no token has no identity,
+  so they keep seeing the parameter.
+- **Tool names.** Type a readable name over an operation id in the tool
+  policy table (`list_2` becomes `listBots`). Clients see and call the new
+  name; the old one still works.
+
 ### Korean and English
 
 The portal is written in English and translated to Korean in the browser:

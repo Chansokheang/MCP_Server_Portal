@@ -252,7 +252,17 @@ const I18N = (() => {
     "No credential is required because the agent-token requirement is switched off on the Security page.": "보안 페이지에서 에이전트 토큰 요구가 꺼져 있어 자격 증명이 필요 없습니다.",
   });
   Object.assign(dict, {
-    "What to prepare": "준비할 것", "Sign-in log": "로그인 로그", "Registered MCP clients": "등록된 MCP 클라이언트", "Recent steps": "최근 단계",
+    "What to prepare": "준비할 것", "Guidance for the model": "모델을 위한 안내", "How to use this backend": "이 백엔드 사용 방법",
+    "Parameters filled in from the caller": "호출자 정보로 채우는 매개변수", "Save guidance": "안내 저장", "Guidance saved": "안내 저장됨",
+    "Usage notes set": "사용 안내 설정됨", "No usage notes": "사용 안내 없음", "Parameter": "매개변수", "Used by": "사용 도구", "Value": "값",
+    "Asked from the model": "모델에게 물음", "Instructions for the model": "모델을 위한 지침", "What the model is told": "모델이 받는 안내", "Preview as": "미리보기 대상",
+    "a caller with no token": "토큰 없는 호출자", "Hidden from the model, filled on every call": "모델에게 숨기고 호출마다 채움",
+    "Sent to the model when it connects, on every gateway that serves this backend. Say which tool to call first and which next, in plain steps, and what never to ask the user for.": "모델이 연결할 때, 이 백엔드를 제공하는 모든 게이트웨이에서 전달됩니다. 어떤 도구를 먼저, 어떤 도구를 다음에 호출할지 단계로 적고, 사용자에게 묻지 말아야 할 것을 적으세요.",
+    "A parameter bound to the caller's identity disappears from the tools and is filled in by the gateway, whatever the model sends. The model can no longer pick the wrong company or person.": "호출자 신원에 묶인 매개변수는 도구에서 사라지고, 모델이 무엇을 보내든 게이트웨이가 채웁니다. 모델이 잘못된 회사나 사람을 고를 수 없습니다.",
+    "Applies on the next connection. A caller with no token has no identity to fill in, so they keep seeing the parameter.": "다음 연결부터 적용됩니다. 토큰이 없는 호출자는 채울 신원이 없으므로 매개변수가 계속 보입니다.",
+    "The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are added underneath.": "모델이 여기에 연결할 때 처음 읽는 내용입니다. 누구를 돕는지, 백엔드들이 어떻게 맞물리는지 적으세요. 각 백엔드의 사용 안내가 그 아래에 붙습니다.",
+    "Add instructions above, or usage notes on a backend's page. Without them a model has only tool names and descriptions to go on.": "위에 지침을 추가하거나 백엔드 페이지에서 사용 안내를 추가하세요. 없으면 모델은 도구 이름과 설명만 보고 판단합니다.",
+    "This backend's tools take no parameters.": "이 백엔드의 도구에는 매개변수가 없습니다.", "Refresh tools once to read this server's parameter names.": "도구 새로고침을 한 번 실행하면 이 서버의 매개변수 이름을 읽습니다.", "Sign-in log": "로그인 로그", "Registered MCP clients": "등록된 MCP 클라이언트", "Recent steps": "최근 단계",
     "Client": "클라이언트", "Client id": "클라이언트 ID", "Sends users back to": "사용자 복귀 주소", "Registered": "등록 시각", "Step": "단계", "Client software": "클라이언트 소프트웨어",
     "No client has registered yet": "아직 등록된 클라이언트가 없습니다", "Nothing yet": "아직 없음",
     "Every step an MCP client takes at the gateway's sign-in endpoints (discovery, registration, the sign-in page, token exchange) and every call the gateway refused. When a connector says it could not reach the gateway, the last lines here say how far it got.": "MCP 클라이언트가 게이트웨이 로그인 엔드포인트에서 거친 모든 단계(검색, 등록, 로그인 페이지, 토큰 교환)와 게이트웨이가 거부한 모든 호출입니다. 커넥터가 게이트웨이에 연결할 수 없다고 하면 여기 마지막 줄들이 어디까지 갔는지 알려줍니다.",
@@ -269,6 +279,8 @@ const I18N = (() => {
   rules.push(
     [/^Add the gateway as a custom connector, point it at (.+) on its public address, then enable it as a tool for the agent\.$/, "게이트웨이를 사용자 지정 커넥터로 추가하고 공개 주소의 $1 을 가리키게 한 뒤, 에이전트의 도구로 활성화하세요."],
     [/^Who can use (.+)$/, "$1을(를) 사용할 수 있는 사람"],
+    [/^(\d+) parameter\(s\) filled in$/, "매개변수 $1개 자동 입력"], [/^(\d+) other parameter\(s\)$/, "기타 매개변수 $1개"],
+    [/^Filled with (.+)$/, "$1(으)로 채움"], [/^Looks like (.+)$/, "$1(으)로 보임"],
     [/^Registered backends, (\d+) published$/, "등록된 백엔드, $1개 게시됨"], [/^Gateway calls, last 14 days · (\d+) denied, (\d+) errors$/, "게이트웨이 호출, 최근 14일 · 거부 $1, 오류 $2"],
     [/^Security score, (\d+) open item\(s\)$/, "보안 점수, 미완료 $1개"], [/^Accepted risk, demo data only: (.+)$/, "수용된 위험, 데모 데이터 전용: $1"],
     [/^Unconfirmed: (.+)$/, "미확인: $1"], [/^Comma separated\. In use: (.+)\.$/, "쉼표로 구분. 사용 중: $1."],
