@@ -207,19 +207,19 @@ Three more per-backend settings, with per-gateway overrides:
 - **Which tool produces which id.** `askBot.botId` comes from `listBots`,
   field `id`. The gateway writes "get it from listBots" into the tool's
   description and, when a call arrives without the value, tells the model
-  what to call first. Or type the value in by hand, in one of two ways: a
-  **fixed value** is sent on every call of that tool and hidden from the
-  model; a **default** is shown to the model and used only when it leaves the
-  parameter out. Each typed row has an on/off switch. Rows are stated by an admin or **learned from real
+  what to call first. This is a fact about the API, so it holds on every
+  gateway. Rows are stated by an admin or **learned from real
   calls**: within a session the gateway remembers the values each tool
   returned, and when a later call uses one of them, that is an observed link
   (counted, never applied until confirmed). It works across backends too.
-- **Values for this gateway.** A backend is shared by every team, so the
-  values typed on its page are only the starting point. The gateway page
-  lists them and lets an admin replace the value, change fixed to default,
-  switch a row off, or add a value that exists on this gateway alone. The
-  backend's own rows stay as they are for every other gateway
-  (`PUT /api/endpoints/{key}/settings` with `values`).
+- **Values for this gateway.** A value depends on who is using the gateway,
+  so it is set on the gateway page, per backend tool and parameter: a
+  **fixed value** is sent on every call and hidden from the model; a
+  **default** is shown to the model and used only when it leaves the
+  parameter out. Each row has an on/off switch, and other gateways are not
+  affected (`PUT /api/endpoints/{key}/settings` with `values`). The backend
+  API still accepts a typed value in `comes_from` for a value shared by every
+  gateway; the gateway page shows such rows as inherited.
 - **Workflows.** A fixed sequence published as one tool on a gateway:
   `askCompanyBot(question)` runs `listBots`, then `askBot` with
   `{{steps.0.data.0.id}}` and `{{input.question}}`. The gateway runs the

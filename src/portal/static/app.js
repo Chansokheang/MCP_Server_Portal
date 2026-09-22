@@ -870,19 +870,23 @@ function bindSourceControls(root) {
 /** Notes for the model, where each parameter's value comes from, and which tool produces which id: per backend, inherited by every gateway. */
 function guidanceSection(p, params) {
   const toolName = (n) => { const t = params.tools.find((x) => x.name === n); return t?.alias || n; };
-  const FIXED = "__fixed__", DEFAULT = "__default__";
-  const producerSelect = (tools, sel, param) => `<select data-k="producer" aria-label="Where ${esc(param)} comes from"><option value="">not set</option>${tools.map((t) => `<option value="${esc(t.name)}" ${t.name === sel ? "selected" : ""}>from ${esc(t.alias || t.name)}</option>`).join("")}<option value="${FIXED}" ${sel === FIXED ? "selected" : ""}>a value I type in (hidden from the model)</option><option value="${DEFAULT}" ${sel === DEFAULT ? "selected" : ""}>a default the model may change</option></select>`;
+  const producerSelect = (tools, sel, param) => `<select data-k="producer" aria-label="Where ${esc(param)} comes from"><option value="">not set</option>${tools.map((t) => `<option value="${esc(t.name)}" ${t.name === sel ? "selected" : ""}>from ${esc(t.alias || t.name)}</option>`).join("")}</select>`;
   const originRow = (o) => {
     const key = `${o.tool}.${o.param}`;
+    if (o.fixed || o.default) {  // typed before values moved to the gateway pages: kept until removed, set per gateway from now on
+      const typed = o.fixed ? o.confirmed.value : o.confirmed.default;
+      return `<tr data-typed="${esc(key)}"><td class="mono">${esc(toolName(o.tool))}<span class="muted">.</span>${esc(o.param)}</td>
+        <td class="small">${o.fixed ? "Fixed value" : "Default"} <span class="mono">${esc(typeof typed === "string" ? typed : JSON.stringify(typed))}</span>${o.enabled === false ? " (off)" : ""}, set here earlier. Values are now set on each gateway's page; this one still applies to every gateway until removed.</td>
+        <td><button class="btn small link" data-k="remove"><i class="ph ph-x"></i> Remove</button></td>
+        <td class="small muted">set by hand</td></tr>`;
+    }
     const top = o.seen[0];
-    const producer = o.fixed ? FIXED : o.default ? DEFAULT : (o.confirmed?.tool || (top ? top.origin.split(".")[0].split(":").pop() : ""));
-    const typed = o.fixed ? o.confirmed.value : o.default ? o.confirmed.default : null;
-    const field = (o.fixed || o.default) ? (typeof typed === "string" ? typed : JSON.stringify(typed)) : (o.confirmed?.field ?? (top ? top.origin.split(".").slice(1).join(".") : ""));
+    const producer = o.confirmed?.tool || (top ? top.origin.split(".")[0].split(":").pop() : "");
+    const field = o.confirmed?.field ?? (top ? top.origin.split(".").slice(1).join(".") : "");
     return `<tr data-origin="${esc(key)}"><td class="mono">${esc(toolName(o.tool))}<span class="muted">.</span>${esc(o.param)}</td>
       <td><div class="cell-row">${producerSelect(params.tools, producer, o.param)}
-        <input data-k="field" class="mono" value="${esc(field)}" placeholder="${o.fixed ? "the value to send" : o.default ? "the default value" : "field, e.g. id"}" style="min-width:110px"></div></td>
-      <td class="small">${o.fixed ? chip("lilac", "Fixed value", "push-pin") : o.default ? chip("lilac", "Default", "arrow-bend-down-right") : o.confirmed ? chip("green", "Confirmed", "check") : chip("amber", "Seen, not confirmed", "eye")}</td>
-      <td>${o.fixed || o.default ? `<input type="checkbox" class="switch" data-k="on" ${o.enabled === false ? "" : "checked"} aria-label="On">` : ""}</td>
+        <input data-k="field" class="mono" value="${esc(field)}" placeholder="field, e.g. id" style="min-width:110px"></div></td>
+      <td class="small">${o.confirmed ? chip("green", "Confirmed", "check") : chip("amber", "Seen, not confirmed", "eye")}</td>
       <td class="small muted">${o.seen.length ? o.seen.map((s) => `${esc(s.origin)} × ${s.count}`).join(", ") : "set by hand"}</td></tr>`;
   };
   return `
@@ -892,13 +896,13 @@ function guidanceSection(p, params) {
         <div class="setting stacked"><div class="setting-text"><strong>How to use this backend</strong><p class="muted small">Sent to the model when it connects, on every gateway that serves this backend. Say which tool to call first and which next, in plain steps, and what never to ask the user for.</p></div>
           <div class="setting-ctl"><textarea id="gd-notes" rows="5" style="width:100%;min-height:110px" placeholder="To answer a policy question: 1) listBots to find the company's bots, 2) askBot with the botId. Never ask the user for a botId or a company number.">${esc(p.instructions || "")}</textarea></div></div>
         <div class="setting"><div class="setting-text"><strong>Filled in from the signed-in user</strong><p class="muted small">${params.items.some((x) => x.implicit) ? `The gateway fills in <span class="mono">${esc(params.items.filter((x) => x.implicit).map((x) => x.name).join(", "))}</span> from the caller's company on every call and never shows ${params.items.filter((x) => x.implicit).length > 1 ? "them" : "it"} to the model, so the model cannot ask for the wrong company.` : "This backend's tools take no company parameter, so nothing is filled in automatically."}</p></div></div>
-        <div class="setting stacked"><div class="setting-text"><strong>Which tool produces which id</strong><p class="muted small">"askBot needs a botId, which listBots returns in field id." The gateway writes this into the tool's description and, when a call arrives without the value, tells the model what to call first. Or type the value in yourself: a fixed value is sent on every call and hidden from the model; a default is shown to the model and used only when it leaves the parameter out. Switch a typed value off to keep it without using it. Each gateway can change or switch off these values for its own users on its page. Rows marked seen were observed in real calls: a value one tool returned was used by another.</p></div>
+        <div class="setting stacked"><div class="setting-text"><strong>Which tool produces which id</strong><p class="muted small">"askBot needs a botId, which listBots returns in field id." This is a fact about the API, so it holds on every gateway: the gateway writes it into the tool's description and, when a call arrives without the value, tells the model what to call first. Rows marked seen were observed in real calls: a value one tool returned was used by another. A fixed value or a default for a parameter depends on who is using it, so those are set on each gateway's page.</p></div>
           <div class="setting-ctl"><div class="table-wrap"><table id="gd-origins">
-            <tr><th>Parameter</th><th>Comes from</th><th></th><th>On</th><th>Observed</th></tr>
+            <tr><th>Parameter</th><th>Comes from</th><th></th><th>Observed</th></tr>
             ${params.origins.map(originRow).join("")}
             <tr id="gd-origin-new"><td style="min-width:300px"><div class="cell-row"><select data-k="new-tool" aria-label="Tool"><option value="">tool…</option>${params.tools.map((t) => `<option value="${esc(t.name)}">${esc(t.alias || t.name)}</option>`).join("")}</select><select data-k="new-param" aria-label="Parameter"><option value="">parameter…</option></select></div></td>
               <td><div class="cell-row">${producerSelect(params.tools, "", "new")}<input data-k="field" class="mono" placeholder="field, e.g. id" style="min-width:110px"></div></td>
-              <td colspan="3" class="small muted">Add a row by hand</td></tr>
+              <td colspan="2" class="small muted">Add a row by hand</td></tr>
           </table></div></div></div>
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next connection. A caller with no token has no identity to fill in, so they keep seeing those parameters.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="gd-save"><i class="ph ph-check"></i> Save guidance</button></div></div>
@@ -935,14 +939,14 @@ function gatewayValuesSection(es, told) {
   return `<div id="gvalues">
       <div class="section-head"><h2 class="section-title">Values for this gateway</h2>${rows.length ? chip("lilac", `${rows.filter((r) => r.enabled).length} of ${rows.length} in use`, "sliders-horizontal") : ""}</div>
       <div class="card settings-list">
-        <div class="setting stacked"><div class="setting-text"><strong>Fixed values and defaults</strong><p class="muted small">A backend is shared by every team, so the values typed on its page are only the starting point. Here you set them for the people who use this gateway, or switch them off. A fixed value is sent on every call and hidden from the model; a default is shown to the model and used only when it leaves the parameter out. Leave the value empty to keep the backend's.</p></div>
+        <div class="setting stacked"><div class="setting-text"><strong>Fixed values and defaults</strong><p class="muted small">A value that belongs to the people who use this gateway: their project, their team's usual choice. A fixed value is sent on every call and hidden from the model; a default is shown to the model and used only when it leaves the parameter out. Pick the backend, the tool and the parameter, type the value, and switch it off whenever it should not apply.</p></div>
           <div class="setting-ctl"><div class="table-wrap"><table id="gv-table">
             <tr><th>Backend</th><th>Parameter</th><th>Kind</th><th>Value here</th><th>On</th><th></th></tr>
             ${rows.map(row).join("")}
             <tr id="gv-new"><td colspan="2" style="min-width:420px"><div class="cell-row" style="flex-wrap:nowrap"><select data-k="new-backend" aria-label="Backend"><option value="">backend…</option>${backends.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("")}</select><select data-k="new-tool" aria-label="Tool"><option value="">tool…</option></select><select data-k="new-param" aria-label="Parameter"><option value="">parameter…</option></select></div></td>
               <td>${kindSelect("value")}</td><td><input data-k="value" class="mono" placeholder="the value" style="min-width:120px"></td><td><input type="checkbox" class="switch" data-k="on" checked aria-label="On"></td><td class="small muted">Add a value for this gateway</td></tr>
           </table></div></div></div>
-        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next connection. The backend's own values stay as they are for every other gateway.</p></div>
+        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next connection. Other gateways are not affected.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="gv-save"><i class="ph ph-check"></i> Save values</button></div></div>
       </div>
     </div>`;
@@ -1045,12 +1049,13 @@ function bindAccess(pid, reload, params = { tools: [] }) {
   if ($("#gd-save")) {
     bindSourceControls($("#guidance"));
     const newTool = $("#gd-origin-new [data-k=new-tool]"), newParam = $("#gd-origin-new [data-k=new-param]");
-    $("#page").querySelectorAll("#gd-origins [data-k=producer]").forEach((sel) => sel.onchange = () => { const box = sel.parentElement.querySelector("[data-k=field]"); box.placeholder = sel.value === "__fixed__" ? "the value to send" : sel.value === "__default__" ? "the default value" : "field, e.g. id"; });
+    $("#page").querySelectorAll("#gd-origins tr[data-typed] [data-k=remove]").forEach((b) => b.onclick = () => b.closest("tr").remove());
     if (newTool) newTool.onchange = () => { const t = (params.tools || []).find((x) => x.name === newTool.value); newParam.innerHTML = `<option value="">parameter…</option>` + (t?.params || []).map((q) => `<option value="${esc(q)}">${esc(q)}</option>`).join(""); };
     $("#gd-save").onclick = async () => {
       const comes_from = {};
-      const spec = (producer, text, on) => producer === "__fixed__" ? { value: text, enabled: on } : producer === "__default__" ? { default: text, enabled: on } : { tool: producer, field: text };
-      $("#page").querySelectorAll("tr[data-origin]").forEach((tr) => { const t = tr.querySelector("[data-k=producer]").value; if (t) comes_from[tr.dataset.origin] = spec(t, tr.querySelector("[data-k=field]").value.trim(), tr.querySelector("[data-k=on]") ? tr.querySelector("[data-k=on]").checked : true); });
+      const spec = (producer, text) => ({ tool: producer, field: text });
+      $("#page").querySelectorAll("tr[data-typed]").forEach((tr) => { comes_from[tr.dataset.typed] = (p.comes_from || {})[tr.dataset.typed]; });  // older typed values stay until removed
+      $("#page").querySelectorAll("tr[data-origin]").forEach((tr) => { const t = tr.querySelector("[data-k=producer]").value; if (t) comes_from[tr.dataset.origin] = spec(t, tr.querySelector("[data-k=field]").value.trim()); });
       if (newTool?.value && newParam?.value && $("#gd-origin-new [data-k=producer]").value) comes_from[`${newTool.value}.${newParam.value}`] = spec($("#gd-origin-new [data-k=producer]").value, $("#gd-origin-new [data-k=field]").value.trim());
       try {
         const r = await api("PATCH", `/api/registry/${pid}`, { instructions: $("#gd-notes").value, comes_from });
