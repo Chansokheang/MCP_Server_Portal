@@ -388,7 +388,9 @@ def _public_provider(p: dict) -> dict:
                                   "signed_in_at": cached.get("signed_in_at"), "expires_at": cached.get("expires_at")}
     out["has_spec"] = bool(p.get("spec"))
     out["instructions"] = p.get("instructions") or ""
-    out["bound_params"] = p.get("bound_params") or {}
+    out["param_sources"] = guidance.sources_for(p)
+    out["bound_params"] = {n: v["value"] for n, v in out["param_sources"].items() if v["kind"] == "caller"}
+    out["comes_from"] = p.get("comes_from") or {}
     out["standalone_url"] = policy_store.standalone_url(p)
     out["tool_count"] = len(p["tools"])
     out["tools_enabled"] = sum(t["enabled"] for t in p["tools"].values())
@@ -661,8 +663,14 @@ async def update_provider(request: Request):
         p["access"] = _access_config(body["access"])
     if "instructions" in body:
         p["instructions"] = guidance.clean_instructions(body["instructions"])
-    if "bound_params" in body:
-        p["bound_params"] = guidance.parse_bindings(body["bound_params"])
+    if "param_sources" in body:
+        p["param_sources"] = guidance.parse_sources(body["param_sources"])
+        p.pop("bound_params", None)
+    elif "bound_params" in body:  # older callers: caller bindings only
+        p["param_sources"] = {n: {"kind": "caller", "value": v} for n, v in guidance.parse_bindings(body["bound_params"]).items()}
+        p.pop("bound_params", None)
+    if "comes_from" in body:
+        p["comes_from"] = guidance.parse_comes_from(body["comes_from"], p)
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
         # One gateway, one public address: remember it for the next registration.
@@ -1141,6 +1149,7 @@ def _endpoint_key(request: Request) -> str:
 def _endpoint_public(state: dict, key: str) -> dict:
     own = state["endpoint_settings"].get(key) or {}
     return {"key": key or "_shared", "require_token": own.get("require_token"), "instructions": own.get("instructions") or "",
+            "param_sources": own.get("param_sources") or {}, "workflows": own.get("workflows") or [],
             **policy_store.endpoint_policy(state, key)}
 
 
@@ -1165,6 +1174,29 @@ async def put_endpoint_settings(request: Request):
         own["access"] = _access_config(body["access"])
     if "instructions" in body:
         own["instructions"] = guidance.clean_instructions(body["instructions"])
+    if "param_sources" in body and isinstance(body["param_sources"], dict):
+        # {backend id: {param: {kind, value} | null}}; null clears the backend's own source for this gateway.
+        overrides: dict[str, dict] = {}
+        for pid, per in body["param_sources"].items():
+            if pid not in state["providers"] or not isinstance(per, dict):
+                continue
+            parsed = guidance.parse_sources({n: v for n, v in per.items() if v is not None})
+            cleared = {n: None for n, v in per.items() if v is None}
+            if parsed or cleared:
+                overrides[pid] = {**cleared, **parsed}
+        own["param_sources"] = overrides
+    if "workflows" in body and isinstance(body["workflows"], list):
+        flows, names = [], set()
+        for spec in body["workflows"]:
+            try:
+                wf = guidance.parse_workflow(spec if isinstance(spec, dict) else {})
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from None
+            if wf["name"] in names:
+                raise ApiError(400, f"two workflows are named {wf['name']}")
+            names.add(wf["name"])
+            flows.append(wf)
+        own["workflows"] = flows
     state["endpoint_settings"][key] = own
     policy_store.save(state)
     return JSONResponse(_endpoint_public(state, key))
@@ -1220,11 +1252,25 @@ async def provider_params(request: Request):
     for row in p["tools"].values():
         for name in row.get("params") or []:
             counts[name] = counts.get(name, 0) + 1
-    bound = p.get("bound_params") or {}
-    items = [{"name": n, "tools": c, "bound": bound.get(n), "suggested": guidance.suggested_source(n)} for n, c in counts.items()]
-    items.sort(key=lambda i: (i["bound"] is None, i["suggested"] is None, -i["tools"], i["name"]))
-    return JSONResponse({"items": items, "sources": guidance.SOURCES,
-                         "unknown": sorted(set(bound) - set(counts)), "needs_refresh": p.get("kind") == "mcp" and not counts})
+    sources = guidance.sources_for(p)
+    items = [{"name": n, "tools": c, "source": sources.get(n), "bound": (sources.get(n) or {}).get("value") if (sources.get(n) or {}).get("kind") == "caller" else None,
+              "suggested": guidance.suggested_source(n)} for n, c in counts.items()]
+    items.sort(key=lambda i: (i["source"] is None, i["suggested"] is None, -i["tools"], i["name"]))
+    # Origins: confirmed rows, plus what real calls showed (a value returned by one tool used by another).
+    confirmed = p.get("comes_from") or {}
+    learned = p.get("learned") or {}
+    origins = []
+    for tool, row in p["tools"].items():
+        for param in row.get("params") or []:
+            key = f"{tool}.{param}"
+            seen = sorted(learned.get(key, {}).items(), key=lambda kv: -kv[1])
+            if key in confirmed or seen:
+                origins.append({"tool": tool, "param": param, "confirmed": confirmed.get(key),
+                                "seen": [{"origin": o, "count": c} for o, c in seen[:3]]})
+    origins.sort(key=lambda o: (o["confirmed"] is None, -(o["seen"][0]["count"] if o["seen"] else 0), o["tool"], o["param"]))
+    return JSONResponse({"items": items, "sources": guidance.CALLER_SOURCES, "kinds": list(guidance.KINDS), "origins": origins,
+                         "tools": [{"name": n, "alias": r.get("alias") or "", "params": r.get("params") or []} for n, r in p["tools"].items()],
+                         "unknown": sorted(set(sources) - set(counts)), "needs_refresh": p.get("kind") == "mcp" and not counts})
 
 
 async def endpoint_instructions(request: Request):
@@ -1238,7 +1284,11 @@ async def endpoint_instructions(request: Request):
     text = guidance.compose_instructions(state, key, user["id"] if user else "", claims, "bearer" if user else "env")
     return JSONResponse({"key": key, "as": user["id"] if user else None, "text": text,
                          "backends": [{"id": b["id"], "name": b["name"], "has_notes": bool(b.get("instructions")),
-                                       "bound": b.get("bound_params") or {}} for b in guidance.backends_for(state, key)]})
+                                       "bound": {n: v for n, v in guidance.sources_for(b, state, key).items()},
+                                       "tools": [{"name": n, "alias": r.get("alias") or "", "params": r.get("params") or [], "enabled": r["enabled"],
+                                                  "prefix": (b.get("tool_prefix") or "") if key in state["gateways"] or not key else ""}
+                                                 for n, r in b["tools"].items()]}
+                                      for b in guidance.backends_for(state, key)]})
 
 
 # --- agent tokens ---------------------------------------------------------------

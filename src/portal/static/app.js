@@ -849,23 +849,52 @@ async function testDialog(id) {
 
 // ---- Access control ----
 /** Entitlement + tool policy for one backend, rendered inside its page. */
-/** Notes for the model and parameters the gateway fills in from the caller: set once per backend, inherited by every gateway. */
+/** How a parameter's value is chosen: a <select> of the kinds, plus a value box for fixed and default. */
+const SOURCE_KINDS = (sources) => [["", "Asked from the model"], ...Object.entries(sources).map(([k, l]) => [`caller:${k}`, `Filled with ${l}`]), ["fixed", "Fixed value, hidden from the model"], ["default", "Default, used when the model leaves it out"]];
+function sourceControl(sources, current, id) {
+  const cur = current ? (current.kind === "caller" ? `caller:${current.value}` : current.kind) : "";
+  const showValue = cur === "fixed" || cur === "default";
+  return `<select data-k="kind" aria-label="Where ${esc(id)} comes from">${SOURCE_KINDS(sources).map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+    <input data-k="value" class="mono ${showValue ? "" : "hidden"}" value="${esc(showValue ? (typeof current.value === "string" ? current.value : JSON.stringify(current.value)) : "")}" placeholder="value" aria-label="Value for ${esc(id)}" style="min-width:120px">`;
+}
+function readSource(tr) {
+  const kind = tr.querySelector("[data-k=kind]").value, value = tr.querySelector("[data-k=value]").value;
+  if (!kind) return null;
+  if (kind.startsWith("caller:")) return { kind: "caller", value: kind.slice(7) };
+  return value.trim() ? { kind, value } : null;
+}
+function bindSourceControls(root) {
+  root.querySelectorAll("[data-k=kind]").forEach((sel) => sel.onchange = () => { const v = sel.value; sel.parentElement.querySelector("[data-k=value]").classList.toggle("hidden", v !== "fixed" && v !== "default"); });
+}
+
+/** Notes for the model, where each parameter's value comes from, and which tool produces which id: per backend, inherited by every gateway. */
 function guidanceSection(p, params) {
-  const bound = params.items.filter((x) => x.bound).length;
-  const srcOpt = (item) => `<option value="">Asked from the model</option>${Object.entries(params.sources).map(([k, label]) => `<option value="${esc(k)}" ${item.bound === k ? "selected" : ""}>Filled with ${esc(label)}</option>`).join("")}`;
-  const worth = params.items.filter((x) => x.bound || x.suggested);
-  const rest = params.items.filter((x) => !x.bound && !x.suggested);
+  const set = params.items.filter((x) => x.source).length;
+  const worth = params.items.filter((x) => x.source || x.suggested);
+  const rest = params.items.filter((x) => !x.source && !x.suggested);
   const row = (x) => `<tr data-param="${esc(x.name)}"><td class="mono">${esc(x.name)}</td><td class="small">${x.tools} tool(s)</td>
-    <td><select data-k="source" aria-label="Where ${esc(x.name)} comes from">${srcOpt(x)}</select></td>
-    <td class="small muted">${x.bound ? "Hidden from the model, filled on every call" : x.suggested ? `Looks like ${esc(params.sources[x.suggested])}` : ""}</td></tr>`;
+    <td class="nowrap" style="display:flex;gap:6px;align-items:center">${sourceControl(params.sources, x.source, x.name)}</td>
+    <td class="small muted">${x.source ? (x.source.kind === "default" ? "Shown to the model as the default" : "Hidden from the model, sent on every call") : x.suggested ? `Looks like ${esc(params.sources[x.suggested])}` : ""}</td></tr>`;
+  const toolName = (n) => { const t = params.tools.find((x) => x.name === n); return t?.alias || n; };
+  const originRow = (o) => {
+    const key = `${o.tool}.${o.param}`;
+    const top = o.seen[0];
+    const producer = o.confirmed?.tool || (top ? top.origin.split(".")[0].split(":").pop() : "");
+    const field = o.confirmed?.field ?? (top ? top.origin.split(".").slice(1).join(".") : "");
+    return `<tr data-origin="${esc(key)}"><td class="mono">${esc(toolName(o.tool))}<span class="muted">.</span>${esc(o.param)}</td>
+      <td><select data-k="producer" aria-label="Which tool produces ${esc(o.param)}"><option value="">not set</option>${params.tools.map((t) => `<option value="${esc(t.name)}" ${t.name === producer ? "selected" : ""}>${esc(t.alias || t.name)}</option>`).join("")}</select>
+        <input data-k="field" class="mono" value="${esc(field)}" placeholder="field, e.g. id" style="min-width:110px"></td>
+      <td class="small">${o.confirmed ? chip("green", "Confirmed", "check") : chip("amber", "Seen, not confirmed", "eye")}</td>
+      <td class="small muted">${o.seen.length ? o.seen.map((s) => `${esc(s.origin)} × ${s.count}`).join(", ") : "set by hand"}</td></tr>`;
+  };
   return `
     <div id="guidance">
-      <div class="section-head"><h2 class="section-title">Guidance for the model</h2>${p.instructions ? chip("green", "Usage notes set", "check") : chip("amber", "No usage notes", "warning")}${bound ? chip("lilac", `${bound} parameter(s) filled in`, "user-check") : ""}</div>
+      <div class="section-head"><h2 class="section-title">Guidance for the model</h2>${p.instructions ? chip("green", "Usage notes set", "check") : chip("amber", "No usage notes", "warning")}${set ? chip("lilac", `${set} parameter source(s)`, "sliders-horizontal") : ""}${Object.keys(p.comes_from || {}).length ? chip("lilac", `${Object.keys(p.comes_from).length} origin(s)`, "flow-arrow") : ""}</div>
       <div class="card settings-list">
         <div class="setting" style="align-items:start"><div class="setting-text"><strong>How to use this backend</strong><p class="muted small">Sent to the model when it connects, on every gateway that serves this backend. Say which tool to call first and which next, in plain steps, and what never to ask the user for.</p></div>
           <div class="setting-ctl" style="flex:1 1 420px"><textarea id="gd-notes" rows="5" style="width:100%;min-height:110px" placeholder="To answer a policy question: 1) listBots to find the company's bots, 2) askBot with the botId. Never ask the user for a botId or a company number.">${esc(p.instructions || "")}</textarea></div></div>
-        <div class="setting" style="align-items:start"><div class="setting-text"><strong>Parameters filled in from the caller</strong><p class="muted small">A parameter bound to the caller's identity disappears from the tools and is filled in by the gateway, whatever the model sends. The model can no longer pick the wrong company or person.</p></div>
-          <div class="setting-ctl" style="flex:1 1 420px">
+        <div class="setting" style="align-items:start"><div class="setting-text"><strong>Where each parameter's value comes from</strong><p class="muted small">Asked from the model unless you say otherwise. Filled from the caller and fixed values are hidden from the model and sent on every call. A default stays visible and is used when the model leaves it out. A gateway can override these for its own team.</p></div>
+          <div class="setting-ctl" style="flex:1 1 460px">
             ${params.needs_refresh ? `<p class="muted small" style="margin:0">Refresh tools once to read this server's parameter names.</p>` : `<div class="table-wrap"><table>
               <tr><th>Parameter</th><th>Used by</th><th>Value</th><th></th></tr>
               ${worth.map(row).join("")}
@@ -873,7 +902,15 @@ function guidanceSection(p, params) {
               ${params.items.length ? "" : `<tr><td colspan="4" class="muted small">This backend's tools take no parameters.</td></tr>`}
             </table></div>`}
           </div></div>
-        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next connection. A caller with no token has no identity to fill in, so they keep seeing the parameter.</p></div>
+        <div class="setting" style="align-items:start"><div class="setting-text"><strong>Which tool produces which id</strong><p class="muted small">"askBot needs a botId, which listBots returns in field id." The gateway writes this into the tool's description and, when a call arrives without the value, tells the model what to call first. Rows marked seen were observed in real calls: a value one tool returned was used by another. Confirm them or set your own.</p></div>
+          <div class="setting-ctl" style="flex:1 1 460px"><div class="table-wrap"><table id="gd-origins">
+            <tr><th>Parameter</th><th>Comes from</th><th></th><th>Observed</th></tr>
+            ${params.origins.map(originRow).join("")}
+            <tr id="gd-origin-new"><td><select data-k="new-tool" aria-label="Tool"><option value="">tool…</option>${params.tools.map((t) => `<option value="${esc(t.name)}">${esc(t.alias || t.name)}</option>`).join("")}</select> <select data-k="new-param" aria-label="Parameter"><option value="">parameter…</option></select></td>
+              <td><select data-k="producer" aria-label="Producer"><option value="">not set</option>${params.tools.map((t) => `<option value="${esc(t.name)}">${esc(t.alias || t.name)}</option>`).join("")}</select> <input data-k="field" class="mono" placeholder="field, e.g. id" style="min-width:110px"></td>
+              <td colspan="2" class="small muted">Add a row by hand</td></tr>
+          </table></div></div></div>
+        <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next connection. A caller with no token has no identity to fill in, so they keep seeing those parameters.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="gd-save"><i class="ph ph-check"></i> Save guidance</button></div></div>
       </div>
     </div>`;
@@ -917,7 +954,7 @@ function accessSection(p, d, known, params) {
     </div>`;
 }
 
-function bindAccess(pid, reload) {
+function bindAccess(pid, reload, params = { tools: [] }) {
   $("#acc-mode").onchange = (e) => {
     $("#acc-groups-row").classList.toggle("hidden", e.target.value !== "groups");
     $("#acc-companies-row").classList.toggle("hidden", e.target.value !== "companies");
@@ -929,15 +966,22 @@ function bindAccess(pid, reload) {
       reload();
     } catch (err) { toast("Save failed", err.message, 4500); }
   };
-  if ($("#gd-save")) $("#gd-save").onclick = async () => {
-    const bound_params = {};
-    $("#page").querySelectorAll("tr[data-param]").forEach((tr) => { const v = tr.querySelector("[data-k=source]").value; if (v) bound_params[tr.dataset.param] = v; });
-    try {
-      const r = await api("PATCH", `/api/registry/${pid}`, { instructions: $("#gd-notes").value, bound_params });
-      const n = Object.keys(r.bound_params || {}).length;
-      toast("Guidance saved", `${r.instructions ? "Usage notes set" : "No usage notes"}; ${n} parameter(s) filled in from the caller`); reload();
-    } catch (err) { toast("Save failed", err.message, 4500); }
-  };
+  if ($("#gd-save")) {
+    bindSourceControls($("#guidance"));
+    const newTool = $("#gd-origin-new [data-k=new-tool]"), newParam = $("#gd-origin-new [data-k=new-param]");
+    if (newTool) newTool.onchange = () => { const t = (params.tools || []).find((x) => x.name === newTool.value); newParam.innerHTML = `<option value="">parameter…</option>` + (t?.params || []).map((q) => `<option value="${esc(q)}">${esc(q)}</option>`).join(""); };
+    $("#gd-save").onclick = async () => {
+      const param_sources = {};
+      $("#page").querySelectorAll("tr[data-param]").forEach((tr) => { const s = readSource(tr); if (s) param_sources[tr.dataset.param] = s; });
+      const comes_from = {};
+      $("#page").querySelectorAll("tr[data-origin]").forEach((tr) => { const t = tr.querySelector("[data-k=producer]").value; if (t) comes_from[tr.dataset.origin] = { tool: t, field: tr.querySelector("[data-k=field]").value.trim() }; });
+      if (newTool?.value && newParam?.value && $("#gd-origin-new [data-k=producer]").value) comes_from[`${newTool.value}.${newParam.value}`] = { tool: $("#gd-origin-new [data-k=producer]").value, field: $("#gd-origin-new [data-k=field]").value.trim() };
+      try {
+        const r = await api("PATCH", `/api/registry/${pid}`, { instructions: $("#gd-notes").value, param_sources, comes_from });
+        toast("Guidance saved", `${r.instructions ? "Usage notes set" : "No usage notes"}; ${Object.keys(r.param_sources || {}).length} parameter source(s), ${Object.keys(r.comes_from || {}).length} origin(s)`); reload();
+      } catch (err) { toast("Save failed", err.message, 4500); }
+    };
+  }
   $("#page").querySelectorAll("tr[data-name] input").forEach((inp) => inp.onchange = async () => {
     const tr = inp.closest("tr"); const name = tr.dataset.name;
     const body = {
@@ -1372,7 +1416,7 @@ pages.provider = async () => {
     ${accessSection(p, d, known.items, params)}
     <div class="callout"><i class="ph ph-key"></i><span>Results are limited to the company on the caller's token, and every call is written to the audit log. Connect instructions live on each endpoint's page under Served on.</span></div>`;
 
-  bindAccess(pid, pages.provider);
+  bindAccess(pid, pages.provider, params);
   $("#page").querySelectorAll("[data-disconnect]").forEach((b) => b.onclick = async () => {
     if (!confirm(`Disconnect ${b.dataset.disconnect}? Their calls to ${p.name} are refused until they link the account again.`)) return;
     try { await api("DELETE", `/api/registry/${pid}/connections/${b.dataset.disconnect}`); toast("Account disconnected", b.dataset.disconnect); pages.provider(); }
@@ -1407,6 +1451,55 @@ pages.provider = async () => {
 };
 
 // ---- Gateway page: one endpoint, how to connect, what it serves ----
+const SOURCES_CALLER = { company: "the caller's company (corp number)", user: "the caller's user id", role: "the caller's role" };
+
+/** Create or edit a workflow: a name, inputs, and steps whose arguments may reference {{input.x}} or {{steps.N.path}}. */
+function workflowDialog(index, workflows, allTools, settingsKey) {
+  const wf = index == null ? { name: "", description: "", inputs: { question: { description: "" } }, steps: [{ tool: "", args: {} }], output: "" } : JSON.parse(JSON.stringify(workflows[index]));
+  const toolOpts = (sel) => `<option value="">tool…</option>` + allTools.map((t) => `<option value="${esc(t.name)}" ${t.name === sel ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  const stepRow = (s, i) => `<div class="wf-step" data-i="${i}"><div class="form-2" style="grid-template-columns:auto 1fr auto;align-items:start">
+      <strong style="padding-top:9px">${i + 1}.</strong>
+      <div class="field"><select data-k="tool">${toolOpts(s.tool)}</select>
+        <textarea data-k="args" rows="2" style="min-height:44px" placeholder='{"botId": "{{steps.0.data.0.id}}", "query": "{{input.question}}"}'>${esc(Object.keys(s.args || {}).length ? JSON.stringify(s.args) : "")}</textarea>
+        <span class="muted small" data-k="hint"></span></div>
+      <button type="button" class="btn small danger" data-k="del" style="margin-top:6px"><i class="ph ph-x"></i></button></div></div>`;
+  modal(`<h2><i class="ph ph-flow-arrow"></i> ${index == null ? "New workflow" : `Edit ${esc(wf.name)}`}</h2>
+    <p class="muted">Published as one tool. The gateway runs the steps in order and every step passes through entitlement, tool policy and the audit log as usual. Arguments may use <span class="mono">{{input.name}}</span> for an input and <span class="mono">{{steps.0.data.0.id}}</span> for a field of an earlier step's result.</p>
+    <form id="wf-form" class="form">
+      <div class="form-2">
+        <label class="field">Tool name the model sees <input name="name" value="${esc(wf.name)}" placeholder="askCompanyBot" pattern="[A-Za-z][A-Za-z0-9_]{1,50}" required></label>
+        <label class="field">What it does, for the model <input name="description" value="${esc(wf.description)}" placeholder="Ask the company's chatbot a question and return its answer."></label>
+      </div>
+      <label class="field">Inputs, one per line as name: description <textarea name="inputs" rows="2" style="min-height:52px" placeholder="question: The user's question">${esc(Object.entries(wf.inputs || {}).map(([k, v]) => `${k}: ${v.description || ""}`).join("\n"))}</textarea></label>
+      <div id="wf-steps">${wf.steps.map(stepRow).join("")}</div>
+      <div><button type="button" class="btn small" id="wf-step-add"><i class="ph ph-plus"></i> Add step</button></div>
+      <label class="field">Result to return (optional) <input name="output" value="${esc(wf.output || "")}" placeholder="steps.1.data  (blank returns the last step's result)"></label>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn" id="wf-cancel">Cancel</button><button class="btn solid" type="submit"><i class="ph ph-check"></i> Save workflow</button></div>
+      <p class="error" id="wf-error"></p></form>`);
+  const bindSteps = () => {
+    $("#wf-steps").querySelectorAll(".wf-step").forEach((row) => {
+      row.querySelector("[data-k=del]").onclick = () => { row.remove(); renumber(); };
+      const sel = row.querySelector("[data-k=tool]"), hint = row.querySelector("[data-k=hint]");
+      const show = () => { const t = allTools.find((x) => x.name === sel.value); hint.textContent = t ? (t.params.length ? `takes: ${t.params.join(", ")}` : "takes no arguments") : ""; };
+      sel.onchange = show; show();
+    });
+  };
+  const renumber = () => $("#wf-steps").querySelectorAll(".wf-step").forEach((row, i) => { row.dataset.i = i; row.querySelector("strong").textContent = `${i + 1}.`; });
+  $("#wf-step-add").onclick = () => { $("#wf-steps").insertAdjacentHTML("beforeend", stepRow({ tool: "", args: {} }, $("#wf-steps").children.length)); bindSteps(); };
+  bindSteps();
+  $("#wf-cancel").onclick = closeModal;
+  $("#wf-form").onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
+    const inputs = {};
+    f.inputs.split("\n").map((l) => l.trim()).filter(Boolean).forEach((l) => { const [k, ...d] = l.split(":"); inputs[k.trim()] = { description: d.join(":").trim() }; });
+    const steps = [...$("#wf-steps").querySelectorAll(".wf-step")].map((row) => ({ tool: row.querySelector("[data-k=tool]").value, args: row.querySelector("[data-k=args]").value.trim() || "{}" }));
+    const next = [...workflows]; const spec = { name: f.name.trim(), description: f.description.trim(), inputs, steps, output: f.output.trim() };
+    if (index == null) next.push(spec); else next[index] = spec;
+    try { await api("PUT", `/api/endpoints/${settingsKey}/settings`, { workflows: next }); closeModal(); toast("Workflow saved", `${spec.name} is now a tool on this gateway`); pages.gateway(); }
+    catch (err) { $("#wf-error").textContent = err.message; }
+  };
+}
+
 pages.gateway = async () => {
   const gid = hashParam("g"), sid = hashParam("s");
   const [gws, reg] = await Promise.all([api("GET", "/api/gateways"), api("GET", "/api/registry")]);
@@ -1492,6 +1585,25 @@ pages.gateway = async () => {
           <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
       </div>
     </div>` : ""}
+    ${isAdmin() ? `<div id="flows">
+      <div class="section-head"><h2 class="section-title">Workflows</h2><button class="btn small" id="wf-add"><i class="ph ph-plus"></i> New workflow</button></div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <tr><th>Tool the model sees</th><th>Inputs</th><th>Steps, in order</th><th></th></tr>
+        ${(es.workflows || []).length ? es.workflows.map((w, i) => `<tr><td><strong class="mono">${esc(w.name)}</strong><div class="sub">${esc(w.description)}</div></td><td class="mono small">${esc(Object.keys(w.inputs || {}).join(", ") || "none")}</td><td class="small">${w.steps.map((s, n) => `${n + 1}. <span class="mono">${esc(s.tool)}</span>`).join("<br>")}</td><td class="actions"><button class="btn small" data-wf-edit="${i}"><i class="ph ph-pencil-simple"></i> Edit</button> <button class="btn small danger" data-wf-del="${i}"><i class="ph ph-trash"></i></button></td></tr>`).join("")
+          : `<tr><td colspan="4">${emptyState("flow-arrow", "No workflows yet", "A workflow is a fixed sequence of tools published as one tool. The gateway runs the steps in order, so the model cannot get the order wrong.")}</td></tr>`}
+      </table></div></div>
+    </div>
+    <div id="overrides">
+      <div class="section-head"><h2 class="section-title">Parameter values for this gateway</h2><span class="muted small">Overrides the backends' own settings, for this team only</span></div>
+      <div class="card">
+        ${(told.backends || []).some((b) => b.tools.some((t) => t.params.length)) ? `<div class="table-wrap"><table id="ov-table">
+          <tr><th>Backend</th><th>Parameter</th><th>Value here</th><th>Backend's own</th></tr>
+          ${(told.backends || []).flatMap((b) => { const names = [...new Set(b.tools.flatMap((t) => t.params))]; const own = es.param_sources?.[b.id] || {}; return names.filter((n) => own[n] !== undefined || b.bound[n]).map((n) => `<tr data-ov-backend="${esc(b.id)}" data-param="${esc(n)}"><td>${esc(b.name)}</td><td class="mono">${esc(n)}</td><td class="nowrap" style="display:flex;gap:6px">${sourceControl(SOURCES_CALLER, own[n] === undefined ? b.bound[n] : own[n], n)}</td><td class="small muted">${own[n] === undefined ? "inherited" : own[n] === null ? "cleared here" : "overridden here"}</td></tr>`); }).join("")}
+          <tr id="ov-new"><td><select data-k="backend"><option value="">backend…</option>${(told.backends || []).map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("")}</select></td><td><select data-k="param"><option value="">parameter…</option></select></td><td class="nowrap" style="display:flex;gap:6px">${sourceControl(SOURCES_CALLER, null, "new")}</td><td class="small muted">Add an override</td></tr>
+        </table></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="btn solid small" id="ov-save"><i class="ph ph-check"></i> Save values</button></div>` : `<p class="muted small" style="margin:0">No backend on this gateway takes parameters.</p>`}
+      </div>
+    </div>` : ""}
     <div id="told">
       <div class="section-head"><h2 class="section-title">What the model is told</h2>
         ${isAdmin() ? `<label class="muted small" style="display:flex;align-items:center;gap:8px">Preview as <select id="told-as"><option value="">a caller with no token</option>${people.map((u) => `<option value="${esc(u.id)}" ${u.id === previewAs ? "selected" : ""}>${esc(u.name)} · ${esc(u.id)}</option>`).join("")}</select></label>` : ""}</div>
@@ -1528,6 +1640,27 @@ pages.gateway = async () => {
     $("#es-groups-row").classList.toggle("hidden", e.target.value !== "groups");
     $("#es-companies-row").classList.toggle("hidden", e.target.value !== "companies");
   };
+  if ($("#wf-add")) {
+    const allTools = (told.backends || []).flatMap((b) => b.tools.filter((t) => t.enabled).map((t) => ({ name: (t.prefix || "") + (t.alias || t.name), params: t.params })));
+    $("#wf-add").onclick = () => workflowDialog(null, es.workflows || [], allTools, settingsKey);
+    $("#page").querySelectorAll("[data-wf-edit]").forEach((b) => b.onclick = () => workflowDialog(Number(b.dataset.wfEdit), es.workflows || [], allTools, settingsKey));
+    $("#page").querySelectorAll("[data-wf-del]").forEach((b) => b.onclick = async () => {
+      const wfs = es.workflows.filter((_, i) => i !== Number(b.dataset.wfDel));
+      if (!confirm(`Remove workflow ${es.workflows[Number(b.dataset.wfDel)].name}?`)) return;
+      try { await api("PUT", `/api/endpoints/${settingsKey}/settings`, { workflows: wfs }); toast("Workflow removed"); pages.gateway(); } catch (err) { toast("Save failed", err.message, 4500); }
+    });
+  }
+  if ($("#ov-save")) {
+    bindSourceControls($("#overrides"));
+    const nb = $("#ov-new [data-k=backend]"), np = $("#ov-new [data-k=param]");
+    nb.onchange = () => { const b = (told.backends || []).find((x) => x.id === nb.value); np.innerHTML = `<option value="">parameter…</option>` + [...new Set((b?.tools || []).flatMap((t) => t.params))].map((q) => `<option value="${esc(q)}">${esc(q)}</option>`).join(""); };
+    $("#ov-save").onclick = async () => {
+      const param_sources = {};
+      $("#page").querySelectorAll("tr[data-ov-backend]").forEach((tr) => { (param_sources[tr.dataset.ovBackend] ||= {})[tr.dataset.param] = readSource(tr); });
+      if (nb.value && np.value) (param_sources[nb.value] ||= {})[np.value] = readSource($("#ov-new"));
+      try { await api("PUT", `/api/endpoints/${settingsKey}/settings`, { param_sources }); toast("Values saved", "Applies on the next connection"); pages.gateway(); } catch (err) { toast("Save failed", err.message, 4500); }
+    };
+  }
   if ($("#told-as")) $("#told-as").onchange = (e) => { const q = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")); if (e.target.value) q.as = e.target.value; else delete q.as; setHash("gateway", q); pages.gateway(); };
   if ($("#es-save")) $("#es-save").onclick = async () => {
     try {

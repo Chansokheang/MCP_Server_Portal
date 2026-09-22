@@ -42,6 +42,7 @@ from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.providers.openapi import OpenAPIProvider
 from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
+from fastmcp.tools import Tool
 from fastmcp.tools.base import ToolResult
 from mcp.types import ToolAnnotations
 
@@ -125,6 +126,18 @@ class ResilientProxyProvider(ProxyProvider):
                 oauth.upstream_token.reset(reset)
 
 
+def _parsed_text(result: ToolResult) -> Any:
+    """A JSON result that came back as text (MCP servers without structured output), or None."""
+    for block in result.content or []:
+        text = getattr(block, "text", None)
+        if isinstance(text, str) and text[:1] in "[{":
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
 def namespace_for(provider_id: str) -> str:
     return provider_id.replace("-", "_")
 
@@ -179,6 +192,7 @@ class GovernanceMiddleware(Middleware):
         role = principal.claims.get("role", "employee")
         only = standalone_provider()
         scope = gateway_scope()
+        key = only or _request_state().get("gateway_key") or ""
         visible = []
         for tool in tools:
             parts = self.split(tool.name)
@@ -198,12 +212,12 @@ class GovernanceMiddleware(Middleware):
             # Clients see the name chosen in the portal, prefixed like any other (plain on a standalone endpoint).
             shown = policy.get("alias") or parts[1]
             update: dict[str, Any] = {"name": shown} if only else ({"name": tool.name[: len(tool.name) - len(parts[1])] + shown} if shown != parts[1] else {})
-            # Parameters bound to the caller's identity are filled in by the gateway, so the model never sees them.
-            bound = guidance.bound_values(provider, principal.user_id, principal.claims, principal.source)
-            if bound:
-                slim = guidance.strip_params(tool.parameters, set(bound))
-                if slim is not tool.parameters:
-                    update["parameters"] = slim
+            # Parameters the gateway fills in (caller identity, fixed values) leave the schema; defaults and
+            # origins ("get it from listBots") are written into it, where the model reads them when choosing.
+            hidden, defaults = guidance.resolve_sources(guidance.sources_for(provider, state, key), principal.user_id, principal.claims, principal.source)
+            shaped = guidance.shape_schema(tool.parameters, set(hidden), defaults, guidance.origin_hints(provider, parts[1]))
+            if shaped is not tool.parameters:
+                update["parameters"] = shaped
             # Tell clients (and any gateway proxying this one) which tools only read.
             if policy["kind"] == "read" and tool.annotations is None:
                 update["annotations"] = ToolAnnotations(read_only_hint=True)
@@ -211,6 +225,9 @@ class GovernanceMiddleware(Middleware):
             if policy.get("description"):
                 update["description"] = policy["description"]
             visible.append(tool.model_copy(update=update) if update else tool)
+        # Workflows defined on this endpoint: one tool each, run by the gateway in order.
+        for wf in guidance.workflows_for(state, key):
+            visible.append(Tool(name=wf["name"], description=wf["description"], parameters=guidance.workflow_schema(wf)))
         return visible
 
     def _instructions(self) -> str:
@@ -242,11 +259,38 @@ class GovernanceMiddleware(Middleware):
                 result.instructions = text
         return result
 
+    async def run_workflow(self, wf: dict, arguments: dict, context: MiddlewareContext, call_next) -> ToolResult:
+        """Run a workflow's steps in order through this same middleware, so every step is governed and audited."""
+        missing = [k for k, v in (wf.get("inputs") or {}).items() if v.get("required", True) and arguments.get(k) in (None, "")]
+        if missing:
+            raise ToolError(f"{wf['name']} needs: {', '.join(missing)}")
+        scope: dict[str, Any] = {"input": arguments, "steps": []}
+        last: ToolResult | None = None
+        for i, step in enumerate(wf["steps"]):
+            args = guidance.render(step.get("args") or {}, scope)
+            args = {k: v for k, v in args.items() if v is not None}
+            step_ctx = context.copy(message=context.message.model_copy(update={"name": step["tool"], "arguments": args}))
+            try:
+                last = await self.on_call_tool(step_ctx, call_next)
+            except ToolError as exc:
+                raise ToolError(f"{wf['name']}, step {i + 1} ({step['tool']}): {exc}") from None
+            scope["steps"].append(last.structured_content if last.structured_content is not None
+                                  else "\n".join(getattr(c, "text", "") for c in (last.content or [])))
+        if wf.get("output"):
+            picked = guidance.render("{{" + wf["output"] + "}}", scope)
+            return ToolResult(structured_content=picked if isinstance(picked, dict) else {"result": picked})
+        return last if last is not None else ToolResult(structured_content={})
+
     async def on_call_tool(self, context: MiddlewareContext, call_next) -> ToolResult:
         self.registry.sync()
         name = context.message.name
         arguments = dict(context.message.arguments or {})
         principal = current_principal()
+        endpoint_key = standalone_provider() or _request_state().get("gateway_key") or ""
+        for wf in guidance.workflows_for(policy_store.load(), endpoint_key):
+            if wf["name"] == name:
+                audit.record(principal.user_id, name, arguments, "ok", f"workflow, {len(wf['steps'])} step(s)", via=principal.source)
+                return await self.run_workflow(wf, arguments, context, call_next)
         role = principal.claims.get("role", "employee")
         company = str(principal.claims.get("company") or "")
         via = principal.source
@@ -286,14 +330,24 @@ class GovernanceMiddleware(Middleware):
             audit.record(principal.user_id, name, arguments, "denied", reason, via=via)
             raise ToolError(f"Access denied: {reason}")
 
-        # Identity-bound parameters: whatever the model sent, the caller's own value goes upstream.
+        # Parameter sources: caller identity and fixed values replace whatever the model sent; defaults fill gaps.
         provider = state["providers"][pid]
-        bound = guidance.bound_values(provider, principal.user_id, principal.claims, principal.source)
+        hidden, defaults = guidance.resolve_sources(guidance.sources_for(provider, state, endpoint_key), principal.user_id, principal.claims, principal.source)
         takes = set((provider["tools"].get(op) or {}).get("params") or [])
-        fill = {k: v for k, v in bound.items() if k in takes}
+        fill = {k: v for k, v in hidden.items() if k in takes}
+        fill.update({k: v for k, v in defaults.items() if k in takes and arguments.get(k) in (None, "")})
         if fill and any(arguments.get(k) != v for k, v in fill.items()):
             arguments.update(fill)
             context = context.copy(message=context.message.model_copy(update={"arguments": arguments}))
+        # A parameter with a known origin but no value: say what to call first, before the backend fails obscurely.
+        hint = guidance.missing_origin_hint(provider, op, arguments)
+        if hint:
+            audit.record(principal.user_id, name, arguments, "denied", hint, via=via)
+            raise ToolError(hint)
+        # Learn from real calls: an argument that an earlier tool of this session returned reveals where it comes from.
+        session = guidance.session_id()
+        if session and guidance.observe(state, session, pid, op, arguments):
+            policy_store.save(state)
 
         # OAuth backends get the calling user's own token, never a shared one.
         user_token = None
@@ -352,6 +406,9 @@ class GovernanceMiddleware(Middleware):
                 result = ToolResult(structured_content=scoped)
         audit.record(principal.user_id, name, arguments, "ok",
                      f"{removed} record(s) outside company {company} removed" if removed else "", via=via)
+        if session:
+            guidance.remember(session, pid, op, result.structured_content if result.structured_content is not None
+                              else _parsed_text(result))
         return result
 
 

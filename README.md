@@ -195,6 +195,29 @@ kept **per backend** so every gateway that serves the backend inherits them:
   policy table (`list_2` becomes `listBots`). Clients see and call the new
   name; the old one still works.
 
+### Order and defaults: parameter sources, origins, workflows
+
+Three more per-backend settings, with per-gateway overrides:
+
+- **Parameter sources.** For each parameter: asked from the model (the
+  default), filled from the caller (company, user id, role), a **fixed**
+  value the model never sees, or a **default** used when the model leaves it
+  out. A gateway can override a value for its own team, or clear a backend's
+  setting there.
+- **Which tool produces which id.** `askBot.botId` comes from `listBots`,
+  field `id`. The gateway writes "get it from listBots" into the tool's
+  description and, when a call arrives without the value, tells the model
+  what to call first. Rows are stated by an admin or **learned from real
+  calls**: within a session the gateway remembers the values each tool
+  returned, and when a later call uses one of them, that is an observed link
+  (counted, never applied until confirmed). It works across backends too.
+- **Workflows.** A fixed sequence published as one tool on a gateway:
+  `askCompanyBot(question)` runs `listBots`, then `askBot` with
+  `{{steps.0.data.0.id}}` and `{{input.question}}`. The gateway runs the
+  steps in order through the same entitlement, tool policy and audit as
+  direct calls, so the model cannot get the order wrong. `scripts/guide_askdoc.py`
+  sets all of this up for the AskDoc chatbot.
+
 ### Korean and English
 
 The portal is written in English and translated to Korean in the browser:

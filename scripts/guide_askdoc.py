@@ -61,7 +61,13 @@ def main() -> None:
             off += 1
     print(f"tools: {on} kept with descriptions, {off} switched off, {len(tools) - on - off} already off")
 
-    r = c.patch(f"/api/registry/{args.backend}", json={"instructions": NOTES, "bound_params": {"corpNo": "company"}})
+    r = c.patch(f"/api/registry/{args.backend}", json={
+        "instructions": NOTES,
+        "param_sources": {"corpNo": {"kind": "caller", "value": "company"}},
+        # Which tool produces which id: written into askBot's description, and into the error when botId is missing.
+        "comes_from": {"chat.botId": {"tool": "listByCorp", "field": "id"}, "history.sessionId": {"tool": "chat", "field": "sessionId"},
+                       "get_2.id": {"tool": "listByCorp", "field": "id"}, "listRecommendedQuestions.id": {"tool": "listByCorp", "field": "id"},
+                       "list_3.botId": {"tool": "listByCorp", "field": "id"}}})
     r.raise_for_status()
     guided = "instructions" in r.json()
     named = any(t.get("alias") for t in c.get(f"/api/registry/{args.backend}/tools").json()["items"])
@@ -70,7 +76,14 @@ def main() -> None:
     else:
         print("backend: this portal is older than the guidance release, so names, notes and bindings were ignored. Upgrade, then run this again.")
 
-    r = c.put(f"/api/endpoints/{args.gateway}/settings", json={"instructions": GATEWAY_LEAD})
+    prefix = next((p["tool_prefix"] for p in c.get("/api/registry").json()["items"] if p["id"] == args.backend), "bzp_chatbot_")
+    # One tool that does the whole thing: list the company's bots, take the first, ask it. The gateway runs the steps in order.
+    workflow = {"name": "askCompanyBot", "description": "Ask the company's chatbot a question and return its answer. Use this for any policy or how-to question; no botId needed.",
+                "inputs": {"question": {"description": "The user's question, in their own words"}},
+                "steps": [{"tool": f"{prefix}listBots", "args": {}},
+                          {"tool": f"{prefix}askBot", "args": {"botId": "{{steps.0.data.0.id}}", "query": "{{input.question}}"}}],
+                "output": "steps.1.data"}
+    r = c.put(f"/api/endpoints/{args.gateway}/settings", json={"instructions": GATEWAY_LEAD, "workflows": [workflow]})
     if r.status_code == 200 and guided:
         told = c.get(f"/api/endpoints/{args.gateway}/instructions").json()["text"]
         print(f"gateway {args.gateway}: opening lines set; a model is now told {len(told)} characters of guidance")

@@ -1,40 +1,53 @@
-"""Helping a model find its way through many tools: instructions, identity-bound parameters, tool names.
+"""Helping a model find its way through many tools.
 
-Three things, all per backend so that any gateway serving the backend inherits them:
+Everything here is set per backend, so any gateway that serves the backend
+inherits it, and a gateway may override values for its own team.
 
 - **Instructions.** MCP lets a server send a short text at connect time, which
-  clients hand to the model. Each backend carries its own usage notes (which
-  tool to call first, which next); an endpoint's text is its own lead plus the
-  notes of every backend it serves that this caller may use.
-- **Identity-bound parameters.** A parameter such as ``corpNo`` can be bound to
-  a claim of the caller (company, user id, role). The gateway removes it from
-  the tool's input schema and fills it in on every call, so the model never
-  guesses which company it is asking about.
-- **Tool names.** A spec's operation ids are often ``get_2`` or ``list_3``. A
-  row may carry an ``alias``; clients see and call the alias.
+  clients hand to the model. Each backend carries its own usage notes; an
+  endpoint's text is its own lead plus the notes of every backend it serves
+  that this caller may use.
+- **Parameter sources.** Where a parameter's value comes from when a tool is
+  called: asked from the model (the default), filled from the caller's
+  identity (company, user id, role), a fixed value the model never sees, or a
+  default used when the model leaves it out. A gateway can override a source
+  for its own callers.
+- **Where values come from.** ``askBot.botId`` comes from ``listBots``, field
+  ``id``. Stated by an admin, or learned by watching real calls: a value that
+  came back from one tool and went into another is an observed link. The
+  gateway tells the model at the moment it matters: in the tool's description
+  and in the error when a call arrives without a usable value.
+- **Workflows.** A fixed sequence of tools published as one tool, run by the
+  gateway in order, with each step's inputs taken from the request or from an
+  earlier step's result. The model cannot get the order wrong because it never
+  sees the steps.
+- **Tool names.** A spec's operation ids are often ``get_2``; a row may carry
+  an ``alias`` that clients see and call.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import time
 from typing import Any
 
 from . import policy_store
 
-# Where a bound parameter's value comes from.
-SOURCES = {
+# --- parameter sources ----------------------------------------------------------------
+CALLER_SOURCES = {
     "company": "the caller's company (corp number)",
     "user": "the caller's user id",
     "role": "the caller's role",
 }
+KINDS = ("caller", "fixed", "default")
 ALIAS_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,50}$")
 MAX_INSTRUCTIONS = 2000
-
 _USER_HINT = re.compile(r"^(user_?id|employee_?(id|no|number)|emp_?(id|no)|member_?id|corp_?user_?id)$", re.I)
 
 
 def suggested_source(param: str) -> str | None:
-    """A sensible default binding for a parameter name, offered in the portal, never applied by itself."""
+    """A sensible caller binding for a parameter name, offered in the portal, never applied by itself."""
     if param in policy_store.COMPANY_KEYS or re.fullmatch(r"corp_?(no|number|code)|company_?(id|no|code)|business_?(no|number)", param, re.I):
         return "company"
     if _USER_HINT.match(param):
@@ -46,14 +59,68 @@ def clean_instructions(text: Any) -> str:
     return "\n".join(line.rstrip() for line in str(text or "").strip().splitlines())[:MAX_INSTRUCTIONS]
 
 
+def _coerce(value: Any) -> Any:
+    """A typed value from what a form sends: numbers, booleans and JSON stay themselves, the rest is text."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.lower() in ("true", "false"):
+        return text.lower() == "true"
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    if re.fullmatch(r"-?\d+\.\d+", text):
+        return float(text)
+    if text[:1] in "[{":
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    return text
+
+
+def parse_sources(value: Any) -> dict[str, dict]:
+    """{param: {kind, value}} from a dict of {param: {kind, value}} or {param: "company"} (a caller binding)."""
+    out: dict[str, dict] = {}
+    items = value.items() if isinstance(value, dict) else [(b.get("name"), b) for b in value or [] if isinstance(b, dict)]
+    for name, spec in items:
+        name = str(name or "").strip()
+        if not name:
+            continue
+        if isinstance(spec, str):
+            spec = {"kind": "caller", "value": spec}
+        if not isinstance(spec, dict):
+            continue
+        kind = spec.get("kind") or ("caller" if spec.get("source") else "")
+        val = spec.get("value", spec.get("source"))
+        if kind == "caller" and val in CALLER_SOURCES:
+            out[name] = {"kind": "caller", "value": val}
+        elif kind in ("fixed", "default") and val not in (None, ""):
+            out[name] = {"kind": kind, "value": _coerce(val)}
+    return out
+
+
 def parse_bindings(value: Any) -> dict[str, str]:
-    """{param: source} from a dict or a list of {name, source}; unknown sources and blanks are dropped."""
-    pairs = value.items() if isinstance(value, dict) else [(b.get("name"), b.get("source")) for b in value or [] if isinstance(b, dict)]
-    return {str(n).strip(): s for n, s in pairs if n and str(n).strip() and s in SOURCES}
+    """Older callers send {param: caller source}; keep accepting it."""
+    return {n: s["value"] for n, s in parse_sources(value).items() if s["kind"] == "caller"}
+
+
+def sources_for(provider: dict, state: dict | None = None, key: str = "") -> dict[str, dict]:
+    """Effective parameter sources for a backend on an endpoint: the backend's, then the gateway's overrides."""
+    own = dict(provider.get("param_sources") or {})
+    for name, src in (provider.get("bound_params") or {}).items():  # rows from before sources had kinds
+        own.setdefault(name, {"kind": "caller", "value": src})
+    if state is not None and key:
+        overrides = ((state.get("endpoint_settings", {}).get(key) or {}).get("param_sources") or {}).get(provider["id"]) or {}
+        for name, spec in overrides.items():
+            if spec is None:
+                own.pop(name, None)
+            else:
+                own[name] = spec
+    return own
 
 
 def claim_values(user_id: str, claims: dict | None, source: str) -> dict[str, str]:
-    """The values each source has for this caller. A source with no value is absent, and its bindings stay idle."""
+    """The values each caller source has for this caller. A source with no value is absent, and its bindings stay idle."""
     claims = claims or {}
     values = {"company": str(claims.get("company") or ""), "role": str(claims.get("role") or "")}
     if source == "bearer":  # the env fallback identity is a demo user, not someone to bind parameters to
@@ -61,30 +128,65 @@ def claim_values(user_id: str, claims: dict | None, source: str) -> dict[str, st
     return {k: v for k, v in values.items() if v}
 
 
-def bound_values(provider: dict, user_id: str, claims: dict | None, source: str) -> dict[str, str]:
-    """{param: value} for this backend's bindings that have a value for this caller."""
+def resolve_sources(sources: dict[str, dict], user_id: str, claims: dict | None, source: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(hidden, defaults): values the gateway always sends and hides, and values used when the model leaves them out."""
     have = claim_values(user_id, claims, source)
-    return {param: have[src] for param, src in (provider.get("bound_params") or {}).items() if src in have}
+    hidden: dict[str, Any] = {}
+    defaults: dict[str, Any] = {}
+    for name, spec in sources.items():
+        if spec["kind"] == "caller":
+            if spec["value"] in have:
+                hidden[name] = have[spec["value"]]
+        elif spec["kind"] == "fixed":
+            hidden[name] = spec["value"]
+        else:
+            defaults[name] = spec["value"]
+    return hidden, defaults
 
 
-def strip_params(schema: dict | None, names: set[str]) -> dict | None:
-    """The input schema without the bound parameters (they are filled in by the gateway)."""
-    if not schema or not names or not isinstance(schema.get("properties"), dict):
+def bound_values(provider: dict, user_id: str, claims: dict | None, source: str, state: dict | None = None, key: str = "") -> dict[str, Any]:
+    """{param: value} the gateway fills in and hides for this caller (caller bindings and fixed values)."""
+    return resolve_sources(sources_for(provider, state, key), user_id, claims, source)[0]
+
+
+def shape_schema(schema: dict | None, hidden: set[str], defaults: dict[str, Any], hints: dict[str, str]) -> dict | None:
+    """The input schema as the model should see it: hidden parameters gone, defaults shown, origins hinted."""
+    if not schema or not isinstance(schema.get("properties"), dict):
         return schema
-    hit = names & set(schema["properties"])
-    if not hit:
+    props = schema["properties"]
+    if not (hidden & set(props)) and not (set(defaults) & set(props)) and not (set(hints) & set(props)):
         return schema
-    out = {**schema, "properties": {k: v for k, v in schema["properties"].items() if k not in hit}}
+    new_props = {}
+    for k, v in props.items():
+        if k in hidden:
+            continue
+        v = dict(v) if isinstance(v, dict) else {"type": "string"}
+        if k in defaults:
+            v["default"] = defaults[k]
+            v["description"] = (v.get("description", "") + f" Default: {json.dumps(defaults[k], ensure_ascii=False)}.").strip()
+        if k in hints:
+            v["description"] = (v.get("description", "") + " " + hints[k]).strip()
+        new_props[k] = v
+    out = {**schema, "properties": new_props}
     if isinstance(schema.get("required"), list):
-        out["required"] = [r for r in schema["required"] if r not in hit]
+        out["required"] = [r for r in schema["required"] if r not in hidden and r not in defaults]
     return out
 
 
+def strip_params(schema: dict | None, names: set[str]) -> dict | None:
+    return shape_schema(schema, names, {}, {})
+
+
+# --- tool names ---------------------------------------------------------------------------
 def real_tool_name(provider: dict, op: str) -> str:
     """The stored tool name for what a client called: an alias maps back, anything else is itself."""
     if op in provider.get("tools", {}):
         return op
     return next((name for name, row in provider.get("tools", {}).items() if row.get("alias") == op), op)
+
+
+def shown_name(provider: dict, op: str) -> str:
+    return (provider.get("tools", {}).get(op) or {}).get("alias") or op
 
 
 def alias_problem(provider: dict, tool: str, alias: str) -> str | None:
@@ -96,6 +198,200 @@ def alias_problem(provider: dict, tool: str, alias: str) -> str | None:
     return None
 
 
+# --- where values come from -------------------------------------------------------------
+def parse_comes_from(value: Any, provider: dict) -> dict[str, dict]:
+    """{"tool.param": {"tool": producer, "field": "id"}}; producers must be tools of this backend."""
+    out: dict[str, dict] = {}
+    tools = provider.get("tools") or {}
+    for key, spec in (value or {}).items() if isinstance(value, dict) else []:
+        if not isinstance(spec, dict) or not spec.get("tool"):
+            continue
+        tool, _, param = str(key).partition(".")
+        producer = real_tool_name(provider, str(spec["tool"]))
+        if tool in tools and param and producer in tools:
+            out[f"{tool}.{param}"] = {"tool": producer, "field": str(spec.get("field") or "").strip()}
+    return out
+
+
+def origin_hints(provider: dict, tool: str) -> dict[str, str]:
+    """{param: 'Get it from listBots (field id).'} for a tool's parameters that have a confirmed origin."""
+    out = {}
+    for key, spec in (provider.get("comes_from") or {}).items():
+        t, _, param = key.partition(".")
+        if t == tool:
+            where = f" (field {spec['field']})" if spec.get("field") else ""
+            out[param] = f"Get it from {shown_name(provider, spec['tool'])}{where}; do not ask the user for it."
+    return out
+
+
+def missing_origin_hint(provider: dict, tool: str, arguments: dict) -> str | None:
+    """What to call first when a parameter with a known origin was not given."""
+    for key, spec in (provider.get("comes_from") or {}).items():
+        t, _, param = key.partition(".")
+        if t == tool and arguments.get(param) in (None, ""):
+            return f"'{shown_name(provider, tool)}' needs {param}: call {shown_name(provider, spec['tool'])} first and use its {spec.get('field') or 'result'}."
+    return None
+
+
+# --- learning from real calls --------------------------------------------------------------
+SESSION_TTL = 3600
+MAX_SESSIONS = 500
+_sessions: dict[str, dict] = {}  # session id -> {"at": time, "values": {value: (backend, tool, field)}}
+
+
+def _scalars(node: Any, path: str = "", depth: int = 0, out: dict | None = None) -> dict[str, str]:
+    """{value: field} for every id-like scalar in a result, to a modest depth."""
+    out = {} if out is None else out
+    if depth > 4:
+        return out
+    if isinstance(node, dict):
+        for k, v in node.items():
+            _scalars(v, str(k), depth + 1, out)
+    elif isinstance(node, list):
+        for v in node[:50]:
+            _scalars(v, path, depth + 1, out)
+    elif isinstance(node, (str, int)) and not isinstance(node, bool):
+        text = str(node)
+        if 3 <= len(text) <= 80 and path:
+            out.setdefault(text, path)
+    return out
+
+
+def _prune() -> None:
+    now = time.time()
+    for sid in [s for s, rec in _sessions.items() if now - rec["at"] > SESSION_TTL]:
+        _sessions.pop(sid, None)
+    while len(_sessions) > MAX_SESSIONS:
+        _sessions.pop(next(iter(_sessions)))
+
+
+def remember(session: str, backend: str, tool: str, result: Any) -> None:
+    """Note the values a tool returned, so a later call using one of them reveals where it came from."""
+    if not session or result is None:
+        return
+    _prune()
+    rec = _sessions.setdefault(session, {"at": time.time(), "values": {}})
+    rec["at"] = time.time()
+    for value, field in _scalars(result).items():
+        rec["values"].setdefault(value, (backend, tool, field))
+    if len(rec["values"]) > 5000:
+        rec["values"] = dict(list(rec["values"].items())[-3000:])
+
+
+def observe(state: dict, session: str, backend: str, tool: str, arguments: dict) -> bool:
+    """Record every argument whose value an earlier tool of this session produced. Returns True when state changed."""
+    rec = _sessions.get(session) if session else None
+    if not rec:
+        return False
+    changed = False
+    for param, value in arguments.items():
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            continue
+        hit = rec["values"].get(str(value))
+        if not hit or hit[:2] == (backend, tool):
+            continue
+        src_backend, src_tool, field = hit
+        provider = state["providers"].get(backend)
+        if provider is None:
+            continue
+        learned = provider.setdefault("learned", {})
+        origin = f"{src_tool}.{field}" if src_backend == backend else f"{src_backend}:{src_tool}.{field}"
+        entry = learned.setdefault(f"{tool}.{param}", {})
+        entry[origin] = entry.get(origin, 0) + 1
+        changed = True
+    return changed
+
+
+def session_id() -> str:
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        request = get_http_request()
+        return request.headers.get("mcp-session-id") or (request.scope.get("state") or {}).get("principal", {}).get("token_id") or ""
+    except Exception:  # noqa: BLE001 - no request (stdio, tests): nothing to learn from
+        return ""
+
+
+# --- workflows: a fixed sequence published as one tool ---------------------------------------
+WORKFLOW_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,50}$")
+_TEMPLATE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
+
+
+def parse_workflow(spec: dict) -> dict:
+    """A workflow from the portal's form. Raises ValueError with a reason a person can act on."""
+    name = str(spec.get("name") or "").strip()
+    if not WORKFLOW_ID.match(name):
+        raise ValueError("a workflow name starts with a letter and uses letters, digits and _ only")
+    inputs: dict[str, dict] = {}
+    raw_inputs = spec.get("inputs") or {}
+    for k, v in (raw_inputs.items() if isinstance(raw_inputs, dict) else [(i.get("name"), i) for i in raw_inputs if isinstance(i, dict)]):
+        k = str(k or "").strip()
+        if not k:
+            continue
+        desc = v.get("description", "") if isinstance(v, dict) else str(v or "")
+        inputs[k] = {"type": (v.get("type") if isinstance(v, dict) else None) or "string", "description": str(desc)[:300],
+                     "required": bool(v.get("required", True)) if isinstance(v, dict) else True}
+    steps = []
+    for i, s in enumerate(spec.get("steps") or []):
+        if not isinstance(s, dict) or not str(s.get("tool") or "").strip():
+            raise ValueError(f"step {i + 1} needs a tool")
+        args = s.get("args") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except json.JSONDecodeError:
+                raise ValueError(f"step {i + 1}: arguments must be JSON") from None
+        if not isinstance(args, dict):
+            raise ValueError(f"step {i + 1}: arguments must be a JSON object")
+        steps.append({"tool": str(s["tool"]).strip(), "args": args})
+    if not steps:
+        raise ValueError("a workflow needs at least one step")
+    return {"name": name, "description": " ".join(str(spec.get("description") or "").split())[:600] or f"Runs {len(steps)} steps in order.",
+            "inputs": inputs, "steps": steps, "output": str(spec.get("output") or "").strip()}
+
+
+def workflow_schema(wf: dict) -> dict:
+    props = {k: {"type": v.get("type", "string"), "description": v.get("description", "")} for k, v in (wf.get("inputs") or {}).items()}
+    required = [k for k, v in (wf.get("inputs") or {}).items() if v.get("required", True)]
+    return {"type": "object", "properties": props, "required": required}
+
+
+def _lookup(scope: dict, path: str) -> Any:
+    """`input.question`, `steps.0.data.0.id`, `steps[1].payload.sessionId` against the run's scope."""
+    cur: Any = scope
+    for part in [p for p in re.split(r"[.\[\]]+", path.strip()) if p]:
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return None
+        if cur is None:
+            return None
+    return cur
+
+
+def render(value: Any, scope: dict) -> Any:
+    """Fill {{...}} references in a step's arguments. A lone reference keeps its type; text gets substituted."""
+    if isinstance(value, str):
+        m = _TEMPLATE.fullmatch(value.strip())
+        if m:
+            return _lookup(scope, m.group(1))
+        return _TEMPLATE.sub(lambda mm: "" if _lookup(scope, mm.group(1)) is None else str(_lookup(scope, mm.group(1))), value)
+    if isinstance(value, dict):
+        return {k: render(v, scope) for k, v in value.items()}
+    if isinstance(value, list):
+        return [render(v, scope) for v in value]
+    return value
+
+
+def workflows_for(state: dict, key: str) -> list[dict]:
+    return list((state.get("endpoint_settings", {}).get(key) or {}).get("workflows") or [])
+
+
+# --- what the model is told at connect time --------------------------------------------------
 def backends_for(state: dict, key: str) -> list[dict]:
     """The published backends one endpoint serves: a named gateway's, a deployed backend alone, or all of them."""
     published = [p for p in policy_store.published_registry_providers(state)]
@@ -117,12 +413,16 @@ def compose_instructions(state: dict, key: str, user_id: str = "", claims: dict 
         ok, _ = policy_store.check_provider_access(state, p["id"], claims) if claims is not None else (True, "")
         if not ok:
             continue
-        filled |= set(bound_values(p, user_id, claims, source))
+        filled |= set(bound_values(p, user_id, claims, source, state, key))
         notes = clean_instructions(p.get("instructions"))
         if notes:
             prefix = "" if standalone else f" (tools named `{p.get('tool_prefix') or p['id'].replace('-', '_') + '_'}*`)"
             parts.append(f"## {p['name']}{prefix}\n{notes}")
+    flows = workflows_for(state, key)
+    if flows:
+        parts.append("Ready-made workflows, one call each, preferred when they fit the request: " +
+                     "; ".join(f"{w['name']} ({w['description']})" for w in flows) + ".")
     if filled:
-        parts.append("The gateway fills in these parameters from the signed-in user, so they do not appear in the tools and "
+        parts.append("The gateway fills in these parameters from the signed-in user or fixed settings, so they do not appear in the tools and "
                      f"must never be asked for: {', '.join(sorted(filled))}.")
     return "\n\n".join(parts)[: MAX_INSTRUCTIONS * 4]

@@ -1,0 +1,170 @@
+"""Parameter sources, origins learned from real calls, gateway overrides and workflow tools."""
+
+import asyncio
+
+import httpx
+import httpx2
+import pytest
+import uvicorn
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.exceptions import ToolError
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+from bizplay_mcp import guidance
+from bizplay_mcp.registry_gateway import build_registry_gateway
+from portal.app import app as portal_app, create_app
+
+CALLS: list[tuple[str, dict]] = []
+
+
+async def bots(request: Request):
+    CALLS.append(("bots", dict(request.query_params)))
+    return JSONResponse({"data": [{"id": "bot-77", "name": "Travel QA"}, {"id": "bot-78", "name": "HR"}]})
+
+
+async def chat(request: Request):
+    body = await request.json()
+    CALLS.append(("chat", body))
+    return JSONResponse({"data": {"answer": f"echo: {body.get('query')}", "sessionId": "sess-1", "channel": body.get("channel"), "pageSize": body.get("pageSize")}})
+
+
+async def history(request: Request):
+    return JSONResponse({"data": {"sessionId": request.path_params["sid"], "messages": 2}})
+
+api = Starlette(routes=[Route("/bots", bots), Route("/chat", chat, methods=["POST"]), Route("/history/{sid}", history)])
+SPEC = {"openapi": "3.0.3", "info": {"title": "Bot", "version": "1"}, "paths": {
+    "/bots": {"get": {"operationId": "listBots", "summary": "List bots", "parameters": [
+        {"name": "corpNo", "in": "query", "required": True, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}}},
+    "/chat": {"post": {"operationId": "askBot", "summary": "Ask", "requestBody": {"required": True, "content": {"application/json": {"schema": {
+        "type": "object", "required": ["botId", "query"], "properties": {"botId": {"type": "string"}, "query": {"type": "string"},
+                                                                          "channel": {"type": "string"}, "pageSize": {"type": "integer"}}}}}},
+        "responses": {"200": {"description": "ok"}}}},
+    "/history/{sid}": {"get": {"operationId": "getHistory", "summary": "History", "parameters": [
+        {"name": "sid", "in": "path", "required": True, "schema": {"type": "string"}}], "responses": {"200": {"description": "ok"}}}}}}
+
+
+@pytest.fixture
+async def admin(monkeypatch):
+    monkeypatch.setenv("BIZPLAY_REQUIRE_AGENT_TOKEN", "false")
+    CALLS.clear()
+    guidance._sessions.clear()
+    async with httpx.AsyncClient(base_url="http://portal.test", transport=httpx.ASGITransport(app=portal_app)) as c:
+        r = await c.post("/api/login", json={"email": "admin@bizplay.co.kr", "password": "admin1234"})
+        c.headers["Authorization"] = f"Bearer {r.json()['token']}"
+        yield c
+
+
+@pytest.fixture
+async def served():
+    gw = build_registry_gateway(transport_factory=lambda p: httpx2.ASGITransport(app=api))
+    server = uvicorn.Server(uvicorn.Config(create_app(gw), host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.05)
+    yield f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+    server.should_exit = True
+    await task
+
+
+async def setup(admin):
+    r = await admin.post("/api/registry", json={"name": "Bot", "base_url": "http://x.test", "spec": SPEC, "auth_mode": "open"})
+    pid = r.json()["id"]
+    await admin.post(f"/api/registry/{pid}/publish")
+    await admin.put(f"/api/registry/{pid}/tools/askBot", json={"enabled": True, "confirm": False, "roles": ["employee", "manager"]})
+    await admin.post("/api/gateways", json={"name": "Desk", "providers": [pid]})
+    return pid
+
+
+async def test_sources_fixed_default_caller_and_gateway_override(admin, served):
+    pid = await setup(admin)
+    r = await admin.patch(f"/api/registry/{pid}", json={"param_sources": {
+        "corpNo": {"kind": "caller", "value": "company"}, "channel": {"kind": "fixed", "value": "claude"}, "pageSize": {"kind": "default", "value": "20"}}})
+    assert r.status_code == 200 and r.json()["param_sources"]["pageSize"] == {"kind": "default", "value": 20}, r.text
+    assert r.json()["bound_params"] == {"corpNo": "company"}, "older field still derived"
+    params = {i["name"]: i for i in (await admin.get(f"/api/registry/{pid}/params")).json()["items"]}
+    assert params["channel"]["source"]["kind"] == "fixed" and params["corpNo"]["bound"] == "company"
+
+    tok = (await admin.post("/api/tokens", json={"label": "m", "user_id": "emp001"})).json()["token"]
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "channel" not in ask["properties"], "fixed values are hidden"
+        assert ask["properties"]["pageSize"]["default"] == 20 and "pageSize" not in ask.get("required", []), "defaults are shown"
+        assert "channel" in c.instructions and "corpNo" in c.instructions
+        got = (await c.call_tool("bot_askBot", {"botId": "bot-77", "query": "hi"})).structured_content["data"]
+        assert got["channel"] == "claude" and got["pageSize"] == 20, "fixed sent, default filled"
+        got = (await c.call_tool("bot_askBot", {"botId": "bot-77", "query": "hi", "pageSize": 5, "channel": "web"})).structured_content["data"]
+        assert got["pageSize"] == 5 and got["channel"] == "claude", "a given value beats a default; a fixed value is never overridden"
+
+    # This gateway wants a different channel and no default page size.
+    r = await admin.put("/api/endpoints/desk/settings", json={"param_sources": {pid: {"channel": {"kind": "fixed", "value": "desk"}, "pageSize": None}}})
+    assert r.status_code == 200 and r.json()["param_sources"][pid]["pageSize"] is None
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "default" not in ask["properties"]["pageSize"]
+        got = (await c.call_tool("bot_askBot", {"botId": "bot-77", "query": "hi"})).structured_content["data"]
+        assert got["channel"] == "desk" and got["pageSize"] is None
+    async with Client(StreamableHttpTransport(f"{served}/mcp", auth=tok)) as c:
+        got = (await c.call_tool("bot_askBot", {"botId": "bot-77", "query": "hi"})).structured_content["data"]
+        assert got["channel"] == "claude", "the override is only for that gateway"
+
+
+async def test_origins_are_learned_from_real_calls_then_confirmed(admin, served):
+    pid = await setup(admin)
+    tok = (await admin.post("/api/tokens", json={"label": "m", "user_id": "emp001"})).json()["token"]
+    # One real session: list, then ask with an id from the list, then history with the session id from the answer.
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        found = (await c.call_tool("bot_listBots", {"corpNo": "1078836129"})).structured_content["data"]
+        ans = (await c.call_tool("bot_askBot", {"botId": found[1]["id"], "query": "q"})).structured_content["data"]
+        await c.call_tool("bot_getHistory", {"sid": ans["sessionId"]})
+        await c.call_tool("bot_askBot", {"botId": found[0]["id"], "query": "again"})
+    origins = {f"{o['tool']}.{o['param']}": o for o in (await admin.get(f"/api/registry/{pid}/params")).json()["origins"]}
+    assert origins["askBot.botId"]["seen"][0] == {"origin": "listBots.id", "count": 2} and origins["askBot.botId"]["confirmed"] is None
+    assert origins["getHistory.sid"]["seen"][0]["origin"] == "askBot.sessionId"
+    assert "askBot.query" not in origins, "free text is never an origin"
+
+    # Confirm: the model is told in the schema, and an empty call says what to do first.
+    r = await admin.patch(f"/api/registry/{pid}", json={"comes_from": {"askBot.botId": {"tool": "listBots", "field": "id"}, "nope.x": {"tool": "listBots"}}})
+    assert r.json()["comes_from"] == {"askBot.botId": {"tool": "listBots", "field": "id"}}
+    await admin.put(f"/api/registry/{pid}/tools/listBots", json={"alias": "findBots"})
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "Get it from findBots (field id)" in ask["properties"]["botId"]["description"]
+        with pytest.raises(ToolError, match="call findBots first"):
+            await c.call_tool("bot_askBot", {"query": "no id"})
+
+
+async def test_workflow_runs_steps_in_order_under_governance(admin, served):
+    pid = await setup(admin)
+    await admin.patch(f"/api/registry/{pid}", json={"param_sources": {"corpNo": {"kind": "caller", "value": "company"}}})
+    wf = {"name": "askCompanyBot", "description": "Ask the company's first chatbot a question.",
+          "inputs": {"question": {"description": "What to ask"}},
+          "steps": [{"tool": "bot_listBots", "args": {}},
+                    {"tool": "bot_askBot", "args": {"botId": "{{steps.0.data.0.id}}", "query": "{{input.question}}"}}],
+          "output": "steps.1.data"}
+    r = await admin.put("/api/endpoints/desk/settings", json={"workflows": [wf]})
+    assert r.status_code == 200 and r.json()["workflows"][0]["name"] == "askCompanyBot", r.text
+    assert (await admin.put("/api/endpoints/desk/settings", json={"workflows": [{"name": "bad name", "steps": []}]})).status_code == 400
+    assert (await admin.put("/api/endpoints/desk/settings", json={"workflows": [wf, wf]})).status_code == 400
+
+    tok = (await admin.post("/api/tokens", json={"label": "m", "user_id": "emp001"})).json()["token"]
+    CALLS.clear()
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        tools = {t.name: t for t in await c.list_tools()}
+        assert tools["askCompanyBot"].input_schema["required"] == ["question"] and "askCompanyBot" in c.instructions
+        out = (await c.call_tool("askCompanyBot", {"question": "per diem?"})).structured_content
+        assert out == {"answer": "echo: per diem?", "sessionId": "sess-1", "channel": None, "pageSize": None}
+        assert [n for n, _ in CALLS] == ["bots", "chat"] and CALLS[0][1]["corpNo"] == "1078836129" and CALLS[1][1]["botId"] == "bot-77"
+        with pytest.raises(ToolError, match="needs: question"):
+            await c.call_tool("askCompanyBot", {})
+    # A step the caller may not run stops the workflow with the reason.
+    await admin.put(f"/api/registry/{pid}/tools/askBot", json={"enabled": False})
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        with pytest.raises(ToolError, match="step 2 .*disabled"):
+            await c.call_tool("askCompanyBot", {"question": "x"})
+    # The workflow belongs to that gateway only.
+    async with Client(StreamableHttpTransport(f"{served}/mcp", auth=tok)) as c:
+        assert "askCompanyBot" not in {t.name for t in await c.list_tools()}

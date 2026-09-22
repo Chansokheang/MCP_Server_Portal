@@ -252,7 +252,14 @@ const I18N = (() => {
     "No credential is required because the agent-token requirement is switched off on the Security page.": "보안 페이지에서 에이전트 토큰 요구가 꺼져 있어 자격 증명이 필요 없습니다.",
   });
   Object.assign(dict, {
-    "What to prepare": "준비할 것", "Guidance for the model": "모델을 위한 안내", "How to use this backend": "이 백엔드 사용 방법",
+    "What to prepare": "준비할 것", "Workflows": "워크플로", "New workflow": "새 워크플로", "Tool the model sees": "모델이 보는 도구", "Inputs": "입력", "Steps, in order": "단계 (순서대로)",
+    "No workflows yet": "아직 워크플로가 없습니다", "Parameter values for this gateway": "이 게이트웨이의 매개변수 값", "Value here": "여기 값", "Backend's own": "백엔드 설정", "Save values": "값 저장",
+    "Where each parameter's value comes from": "각 매개변수 값의 출처", "Which tool produces which id": "어떤 도구가 어떤 ID를 만드는지", "Comes from": "출처", "Observed": "관찰됨",
+    "Confirmed": "확인됨", "Seen, not confirmed": "관찰됨, 미확인", "Add a row by hand": "직접 행 추가", "Add an override": "재정의 추가", "inherited": "상속", "cleared here": "여기서 해제", "overridden here": "여기서 재정의",
+    "Fixed value, hidden from the model": "고정값, 모델에게 숨김", "Default, used when the model leaves it out": "기본값, 모델이 생략하면 사용", "Shown to the model as the default": "모델에게 기본값으로 표시", "Hidden from the model, sent on every call": "모델에게 숨기고 호출마다 전송",
+    "Save workflow": "워크플로 저장", "Workflow saved": "워크플로 저장됨", "Workflow removed": "워크플로 제거됨", "Values saved": "값 저장됨", "Add step": "단계 추가",
+    "A workflow is a fixed sequence of tools published as one tool. The gateway runs the steps in order, so the model cannot get the order wrong.": "워크플로는 도구 하나로 공개되는 고정된 도구 순서입니다. 게이트웨이가 단계를 순서대로 실행하므로 모델이 순서를 틀릴 수 없습니다.",
+    "Overrides the backends' own settings, for this team only": "이 팀에만 적용되는 백엔드 설정 재정의", "Guidance for the model": "모델을 위한 안내", "How to use this backend": "이 백엔드 사용 방법",
     "Parameters filled in from the caller": "호출자 정보로 채우는 매개변수", "Save guidance": "안내 저장", "Guidance saved": "안내 저장됨",
     "Usage notes set": "사용 안내 설정됨", "No usage notes": "사용 안내 없음", "Parameter": "매개변수", "Used by": "사용 도구", "Value": "값",
     "Asked from the model": "모델에게 물음", "Instructions for the model": "모델을 위한 지침", "What the model is told": "모델이 받는 안내", "Preview as": "미리보기 대상",
