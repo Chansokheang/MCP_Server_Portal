@@ -424,6 +424,13 @@ input.tool-alias { width: 100%; min-width: 160px; font-weight: 600; border: 1px 
 input.tool-alias:hover, input.tool-alias:focus { border-color: var(--line-strong, #cfd6e0); background: var(--surface); }
 input.tool-alias::placeholder { color: var(--ink); opacity: 1; font-weight: 600; }
 
+/* A setting whose control is a table or a text area: text on top, control full width below. */
+.setting.stacked { grid-template-columns: 1fr; gap: 10px; }
+.setting.stacked .setting-ctl { justify-content: stretch; }
+.setting.stacked .setting-ctl > * { flex: 1 1 auto; width: 100%; }
+.setting.stacked .table-wrap table { width: 100%; }
+.setting.stacked td { vertical-align: middle; }
+.cell-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .wf-step { border: 1px solid var(--line); border-radius: var(--r-tile); padding: 10px 12px; margin-bottom: 8px; }
 .wf-step textarea { min-height: 44px; }
 

@@ -391,6 +391,7 @@ def _public_provider(p: dict) -> dict:
     out["param_sources"] = guidance.sources_for(p)
     out["bound_params"] = {n: v["value"] for n, v in out["param_sources"].items() if v["kind"] == "caller"}
     out["comes_from"] = p.get("comes_from") or {}
+    out["workflows"] = p.get("workflows") or []
     out["standalone_url"] = policy_store.standalone_url(p)
     out["tool_count"] = len(p["tools"])
     out["tools_enabled"] = sum(t["enabled"] for t in p["tools"].values())
@@ -671,6 +672,11 @@ async def update_provider(request: Request):
         p.pop("bound_params", None)
     if "comes_from" in body:
         p["comes_from"] = guidance.parse_comes_from(body["comes_from"], p)
+    if "workflows" in body and isinstance(body["workflows"], list):
+        try:
+            p["workflows"] = guidance.parse_backend_workflows(body["workflows"], p)
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
     if "mcp_url" in body and body["mcp_url"].strip():
         p["mcp_url"] = body["mcp_url"].strip()
         # One gateway, one public address: remember it for the next registration.
@@ -1150,6 +1156,7 @@ def _endpoint_public(state: dict, key: str) -> dict:
     own = state["endpoint_settings"].get(key) or {}
     return {"key": key or "_shared", "require_token": own.get("require_token"), "instructions": own.get("instructions") or "",
             "param_sources": own.get("param_sources") or {}, "workflows": own.get("workflows") or [],
+            "inherited_workflows": [w for w in guidance.workflows_for(state, key) if w.get("backend")],
             **policy_store.endpoint_policy(state, key)}
 
 
@@ -1269,7 +1276,8 @@ async def provider_params(request: Request):
                                 "seen": [{"origin": o, "count": c} for o, c in seen[:3]]})
     origins.sort(key=lambda o: (o["confirmed"] is None, -(o["seen"][0]["count"] if o["seen"] else 0), o["tool"], o["param"]))
     return JSONResponse({"items": items, "sources": guidance.CALLER_SOURCES, "kinds": list(guidance.KINDS), "origins": origins,
-                         "tools": [{"name": n, "alias": r.get("alias") or "", "params": r.get("params") or []} for n, r in p["tools"].items()],
+                         "tools": [{"name": n, "alias": r.get("alias") or "", "params": r.get("params") or [], "enabled": r["enabled"]} for n, r in p["tools"].items()],
+                         "workflows": p.get("workflows") or [],
                          "unknown": sorted(set(sources) - set(counts)), "needs_refresh": p.get("kind") == "mcp" and not counts})
 
 

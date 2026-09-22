@@ -137,6 +137,46 @@ async def test_origins_are_learned_from_real_calls_then_confirmed(admin, served)
             await c.call_tool("bot_askBot", {"query": "no id"})
 
 
+async def test_backend_workflows_are_inherited_and_optional(admin, served):
+    pid = await setup(admin)
+    await admin.patch(f"/api/registry/{pid}", json={"param_sources": {"corpNo": {"kind": "caller", "value": "company"}}})
+    await admin.put(f"/api/registry/{pid}/tools/listBots", json={"alias": "findBots"})
+    flows = [
+        {"name": "askFirstBot", "description": "Ask the first bot.", "inputs": {"question": {}},
+         "steps": [{"tool": "findBots", "args": {}}, {"tool": "askBot", "args": {"botId": "{{steps.0.data.0.id}}", "query": "{{input.question}}"}}], "output": "steps.1.data"},
+        {"name": "askSecondBot", "description": "Ask the second bot.", "inputs": {"question": {}},
+         "steps": [{"tool": "listBots", "args": {}}, {"tool": "askBot", "args": {"botId": "{{steps.0.data.1.id}}", "query": "{{input.question}}"}}], "output": "steps.1.data.answer"},
+    ]
+    r = await admin.patch(f"/api/registry/{pid}", json={"workflows": flows})
+    assert r.status_code == 200 and [w["name"] for w in r.json()["workflows"]] == ["askFirstBot", "askSecondBot"], r.text
+    assert r.json()["workflows"][0]["steps"][0]["tool"] == "listBots", "an alias in a step maps to the stored tool"
+    assert (await admin.patch(f"/api/registry/{pid}", json={"workflows": [{"name": "x", "steps": [{"tool": "elsewhere", "args": {}}]}]})).status_code == 400
+    assert (await admin.patch(f"/api/registry/{pid}", json={"workflows": flows})).status_code == 200
+
+    tok = (await admin.post("/api/tokens", json={"label": "m", "user_id": "emp001"})).json()["token"]
+    # Named gateway and shared endpoint: both workflows appear, steps prefixed, and the model is told they are optional.
+    for ep in ("/mcp/desk", "/mcp"):
+        async with Client(StreamableHttpTransport(f"{served}{ep}", auth=tok)) as c:
+            names = {t.name for t in await c.list_tools()}
+            assert {"askFirstBot", "askSecondBot"} <= names and "bot_askBot" in names, "shortcuts sit next to the tools, never instead of them"
+            assert "Optional shortcuts" in c.instructions and "pick the individual tools yourself" in c.instructions
+            assert (await c.call_tool("askSecondBot", {"question": "hr?"})).structured_content == {"result": "echo: hr?"}
+            assert CALLS[-1][1]["botId"] == "bot-78"
+    inherited = (await admin.get("/api/endpoints/desk/settings")).json()["inherited_workflows"]
+    assert [w["backend"] for w in inherited] == [pid, pid] and inherited[0]["steps"][0]["tool"] == "bot_listBots"
+    # The gateway's own workflow with the same name wins; a different name adds a third.
+    await admin.put("/api/endpoints/desk/settings", json={"workflows": [{"name": "askFirstBot", "description": "gateway's own", "inputs": {"question": {}},
+                                                                          "steps": [{"tool": "bot_listBots", "args": {}}], "output": "steps.0.data.0.name"}]})
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        tools = {t.name: t for t in await c.list_tools()}
+        assert tools["askFirstBot"].description == "gateway's own" and "askSecondBot" in tools
+        assert (await c.call_tool("askFirstBot", {"question": "q"})).structured_content == {"result": "Travel QA"}
+    # Deployed alone: plain tool names inside the steps still resolve.
+    assert (await admin.post(f"/api/registry/{pid}/deploy")).status_code == 200
+    async with Client(StreamableHttpTransport(f"{served}/mcp/{pid}", auth=tok)) as c:
+        assert (await c.call_tool("askSecondBot", {"question": "solo"})).structured_content == {"result": "echo: solo"}
+
+
 async def test_workflow_runs_steps_in_order_under_governance(admin, served):
     pid = await setup(admin)
     await admin.patch(f"/api/registry/{pid}", json={"param_sources": {"corpNo": {"kind": "caller", "value": "company"}}})

@@ -388,7 +388,40 @@ def render(value: Any, scope: dict) -> Any:
 
 
 def workflows_for(state: dict, key: str) -> list[dict]:
-    return list((state.get("endpoint_settings", {}).get(key) or {}).get("workflows") or [])
+    """The workflows an endpoint offers: its own, then each served backend's, with step tools prefixed as on that endpoint.
+
+    A backend's workflows name its own tools plainly; on the shared endpoint and on
+    named gateways those tools carry the backend's prefix, on the backend's own
+    standalone endpoint they do not. An endpoint's own workflow wins a name clash.
+    """
+    own = list((state.get("endpoint_settings", {}).get(key) or {}).get("workflows") or [])
+    names = {w["name"] for w in own}
+    standalone = bool(key) and key not in state["gateways"]
+    for p in backends_for(state, key):
+        prefix = "" if standalone else (p.get("tool_prefix") or p["id"].replace("-", "_") + "_")
+        for wf in p.get("workflows") or []:
+            if wf["name"] in names:
+                continue
+            names.add(wf["name"])
+            own.append({**wf, "backend": p["id"], "steps": [{**s, "tool": prefix + s["tool"]} for s in wf["steps"]]})
+    return own
+
+
+def parse_backend_workflows(value: Any, provider: dict) -> list[dict]:
+    """Workflows stored on a backend: step tools must be its own tools (a stored name or an alias)."""
+    flows, names = [], set()
+    for spec in value or []:
+        wf = parse_workflow(spec if isinstance(spec, dict) else {})
+        if wf["name"] in names:
+            raise ValueError(f"two workflows are named {wf['name']}")
+        for i, step in enumerate(wf["steps"]):
+            real = real_tool_name(provider, step["tool"])
+            if real not in provider.get("tools", {}):
+                raise ValueError(f"step {i + 1}: '{step['tool']}' is not a tool of this backend")
+            step["tool"] = real
+        names.add(wf["name"])
+        flows.append(wf)
+    return flows
 
 
 # --- what the model is told at connect time --------------------------------------------------
@@ -420,8 +453,9 @@ def compose_instructions(state: dict, key: str, user_id: str = "", claims: dict 
             parts.append(f"## {p['name']}{prefix}\n{notes}")
     flows = workflows_for(state, key)
     if flows:
-        parts.append("Ready-made workflows, one call each, preferred when they fit the request: " +
-                     "; ".join(f"{w['name']} ({w['description']})" for w in flows) + ".")
+        parts.append("Optional shortcuts, each a single call that runs several tools in the right order: " +
+                     "; ".join(f"{w['name']} ({w['description']})" for w in flows) +
+                     ". Use one when it matches what the user wants; otherwise pick the individual tools yourself.")
     if filled:
         parts.append("The gateway fills in these parameters from the signed-in user or fixed settings, so they do not appear in the tools and "
                      f"must never be asked for: {', '.join(sorted(filled))}.")

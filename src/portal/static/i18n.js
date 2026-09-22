@@ -252,7 +252,9 @@ const I18N = (() => {
     "No credential is required because the agent-token requirement is switched off on the Security page.": "보안 페이지에서 에이전트 토큰 요구가 꺼져 있어 자격 증명이 필요 없습니다.",
   });
   Object.assign(dict, {
-    "What to prepare": "준비할 것", "Workflows": "워크플로", "New workflow": "새 워크플로", "Tool the model sees": "모델이 보는 도구", "Inputs": "입력", "Steps, in order": "단계 (순서대로)",
+    "What to prepare": "준비할 것", "inherited": "상속됨",
+    "A workflow is a fixed sequence of this backend's tools published as one extra tool, on every gateway that serves the backend. The model may use it or call the tools itself.": "워크플로는 이 백엔드 도구들의 고정된 순서를 하나의 추가 도구로 공개한 것으로, 이 백엔드를 제공하는 모든 게이트웨이에 나타납니다. 모델은 이를 사용할 수도, 도구를 직접 호출할 수도 있습니다.",
+    "A workflow is a fixed sequence of tools published as one extra tool. The gateway runs the steps in order; the model may use it or call the tools itself. Workflows defined on a backend's page appear here too.": "워크플로는 도구들의 고정된 순서를 하나의 추가 도구로 공개한 것입니다. 게이트웨이가 단계를 순서대로 실행하며, 모델은 이를 사용할 수도 도구를 직접 호출할 수도 있습니다. 백엔드 페이지에서 정의한 워크플로도 여기에 나타납니다.", "Workflows": "워크플로", "New workflow": "새 워크플로", "Tool the model sees": "모델이 보는 도구", "Inputs": "입력", "Steps, in order": "단계 (순서대로)",
     "No workflows yet": "아직 워크플로가 없습니다", "Parameter values for this gateway": "이 게이트웨이의 매개변수 값", "Value here": "여기 값", "Backend's own": "백엔드 설정", "Save values": "값 저장",
     "Where each parameter's value comes from": "각 매개변수 값의 출처", "Which tool produces which id": "어떤 도구가 어떤 ID를 만드는지", "Comes from": "출처", "Observed": "관찰됨",
     "Confirmed": "확인됨", "Seen, not confirmed": "관찰됨, 미확인", "Add a row by hand": "직접 행 추가", "Add an override": "재정의 추가", "inherited": "상속", "cleared here": "여기서 해제", "overridden here": "여기서 재정의",
@@ -285,7 +287,7 @@ const I18N = (() => {
   });
   rules.push(
     [/^Add the gateway as a custom connector, point it at (.+) on its public address, then enable it as a tool for the agent\.$/, "게이트웨이를 사용자 지정 커넥터로 추가하고 공개 주소의 $1 을 가리키게 한 뒤, 에이전트의 도구로 활성화하세요."],
-    [/^Who can use (.+)$/, "$1을(를) 사용할 수 있는 사람"],
+    [/^Who can use (.+)$/, "$1을(를) 사용할 수 있는 사람"], [/^Workflows of (.+)$/, "$1의 워크플로"],
     [/^(\d+) parameter\(s\) filled in$/, "매개변수 $1개 자동 입력"], [/^(\d+) other parameter\(s\)$/, "기타 매개변수 $1개"],
     [/^Filled with (.+)$/, "$1(으)로 채움"], [/^Looks like (.+)$/, "$1(으)로 보임"],
     [/^Registered backends, (\d+) published$/, "등록된 백엔드, $1개 게시됨"], [/^Gateway calls, last 14 days · (\d+) denied, (\d+) errors$/, "게이트웨이 호출, 최근 14일 · 거부 $1, 오류 $2"],
