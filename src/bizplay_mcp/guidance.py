@@ -225,16 +225,105 @@ def parse_comes_from(value: Any, provider: dict) -> dict[str, dict]:
                 out[f"{tool}.{param}"] = {"tool": producer, "field": str(spec.get("field") or "").strip()}
         elif spec.get("value") not in (None, ""):
             out[f"{tool}.{param}"] = {"value": _coerce(spec["value"])}
+        elif spec.get("default") not in (None, ""):
+            out[f"{tool}.{param}"] = {"default": _coerce(spec["default"])}
+        else:
+            continue
+        if spec.get("enabled") is False and "tool" not in out[f"{tool}.{param}"]:
+            out[f"{tool}.{param}"]["enabled"] = False  # typed but switched off: kept so it can be switched on again
     return out
 
 
+def parse_gateway_values(value: Any, state: dict) -> dict[str, dict[str, dict]]:
+    """{backend id: {"tool.param": {"value" | "default": x, "enabled": bool}}}: one gateway's changes to typed values.
+
+    A row may replace the backend's value, change its kind, or only switch it off
+    ({"enabled": false}); a row for a parameter the backend has no value for adds one
+    for this gateway alone.
+    """
+    out: dict[str, dict[str, dict]] = {}
+    for pid, rows in (value or {}).items() if isinstance(value, dict) else []:
+        provider = state["providers"].get(pid)
+        if not provider or not isinstance(rows, dict):
+            continue
+        for key, spec in rows.items():
+            if not isinstance(spec, dict):
+                continue
+            tool, _, param = str(key).partition(".")
+            row = provider.get("tools", {}).get(tool)
+            if not row or not param or (row.get("params") and param not in row["params"]):
+                continue
+            entry: dict = {}
+            if spec.get("value") not in (None, ""):
+                entry["value"] = _coerce(spec["value"])
+            elif spec.get("default") not in (None, ""):
+                entry["default"] = _coerce(spec["default"])
+            if spec.get("enabled") is False:
+                entry["enabled"] = False
+            if entry:
+                out.setdefault(pid, {})[f"{tool}.{param}"] = entry
+    return out
+
+
+def typed_rows(provider: dict, state: dict | None = None, key: str = "") -> dict[str, dict]:
+    """Every typed value for one backend as seen from one endpoint: the backend's rows with the gateway's changes on top."""
+    rows = {k: dict(spec) for k, spec in (provider.get("comes_from") or {}).items() if "value" in spec or "default" in spec}
+    if state is not None and key:
+        changes = ((state.get("endpoint_settings", {}).get(key) or {}).get("values") or {}).get(provider["id"]) or {}
+        for k, change in changes.items():
+            merged = {**rows.get(k, {}), **change}
+            if "value" in change:
+                merged.pop("default", None)
+            elif "default" in change:
+                merged.pop("value", None)
+            if "enabled" not in change:
+                merged.pop("enabled", None)  # a new value switches the row back on
+            rows[k] = merged
+    return rows
+
+
+def typed_for(provider: dict, tool: str, state: dict | None = None, key: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+    """({param: fixed value}, {param: default}) in force for one tool on one endpoint. Switched-off rows are left out."""
+    fixed, defaults = {}, {}
+    for k, spec in typed_rows(provider, state, key).items():
+        t, _, param = k.partition(".")
+        if t != tool or spec.get("enabled") is False:
+            continue
+        if "value" in spec:
+            fixed[param] = spec["value"]
+        elif "default" in spec:
+            defaults[param] = spec["default"]
+    return fixed, defaults
+
+
 def fixed_for_tool(provider: dict, tool: str) -> dict[str, Any]:
-    """{param: value} typed by hand for one tool's parameters."""
-    out = {}
-    for key, spec in (provider.get("comes_from") or {}).items():
-        t, _, param = key.partition(".")
-        if t == tool and "value" in spec:
-            out[param] = spec["value"]
+    """{param: value} typed by hand for one tool's parameters, as the backend alone defines them."""
+    return typed_for(provider, tool)[0]
+
+
+def defaults_for_tool(provider: dict, tool: str) -> dict[str, Any]:
+    """{param: default} typed by hand for one tool's parameters, as the backend alone defines them."""
+    return typed_for(provider, tool)[1]
+
+
+def effective_values(state: dict, key: str) -> list[dict]:
+    """The typed values in force on one endpoint, one row per backend parameter, for the gateway page."""
+    changes_all = (state.get("endpoint_settings", {}).get(key) or {}).get("values") or {}
+    out = []
+    for p in backends_for(state, key):
+        base = {k: spec for k, spec in (p.get("comes_from") or {}).items() if "value" in spec or "default" in spec}
+        changes = changes_all.get(p["id"]) or {}
+        for k, spec in typed_rows(p, state, key).items():
+            tool, _, param = k.partition(".")
+            inherited = base.get(k)
+            out.append({"backend": p["id"], "backend_name": p["name"], "tool": tool, "alias": (p["tools"].get(tool) or {}).get("alias") or "",
+                        "param": param, "kind": "value" if "value" in spec else "default", "value": spec.get("value", spec.get("default")),
+                        "enabled": spec.get("enabled") is not False, "inherited": inherited is not None,
+                        "backend_value": None if inherited is None else inherited.get("value", inherited.get("default")),
+                        "backend_kind": None if inherited is None else ("value" if "value" in inherited else "default"),
+                        "backend_enabled": None if inherited is None else inherited.get("enabled") is not False,
+                        "changed": k in changes})
+    out.sort(key=lambda r: (r["backend_name"], r["tool"], r["param"]))
     return out
 
 
@@ -473,7 +562,9 @@ def compose_instructions(state: dict, key: str, user_id: str = "", claims: dict 
             continue
         takes = {q for row in p.get("tools", {}).values() if row.get("enabled") for q in row.get("params") or []}
         filled |= set(bound_values(p, user_id, claims, source, state, key)) & takes
-        filled |= {k.partition(".")[2] for k, spec in (p.get("comes_from") or {}).items() if "value" in spec and p["tools"].get(k.partition(".")[0], {}).get("enabled")}
+        for t, row in p["tools"].items():
+            if row.get("enabled"):
+                filled |= set(typed_for(p, t, state, key)[0])
         notes = clean_instructions(p.get("instructions"))
         if notes:
             prefix = "" if standalone else f" (tools named `{p.get('tool_prefix') or p['id'].replace('-', '_') + '_'}*`)"

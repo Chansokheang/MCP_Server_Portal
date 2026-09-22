@@ -148,6 +148,44 @@ async def test_origins_are_learned_from_real_calls_then_confirmed(admin, served)
         assert CALLS[-1][1]["botId"] == "bot-78"
         assert (await c.call_tool("bot_askBot", {"query": "x", "botId": "bot-77"})).structured_content and CALLS[-1][1]["botId"] == "bot-78", "never overridden by the model"
 
+    # A default typed in by hand: the model sees it, and may change it.
+    await admin.patch(f"/api/registry/{pid}", json={"comes_from": {"askBot.botId": {"default": "bot-77"}}})
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert ask["properties"]["botId"]["default"] == "bot-77" and "botId" not in ask.get("required", [])
+        await c.call_tool("bot_askBot", {"query": "d"}); assert CALLS[-1][1]["botId"] == "bot-77"
+        await c.call_tool("bot_askBot", {"query": "d", "botId": "bot-78"}); assert CALLS[-1][1]["botId"] == "bot-78", "the model's own value wins over a default"
+
+    # Switched off on the backend: kept, reported, but not used.
+    r = await admin.patch(f"/api/registry/{pid}", json={"comes_from": {"askBot.botId": {"default": "bot-77", "enabled": False}}})
+    assert r.json()["comes_from"]["askBot.botId"] == {"default": "bot-77", "enabled": False}
+    assert next(o for o in (await admin.get(f"/api/registry/{pid}/params")).json()["origins"] if o["param"] == "botId")["enabled"] is False
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "default" not in ask["properties"]["botId"]
+
+    # One gateway changes the value for its own users: a fixed value here, while the backend keeps its default.
+    await admin.patch(f"/api/registry/{pid}", json={"comes_from": {"askBot.botId": {"default": "bot-77"}}})
+    r = await admin.put("/api/endpoints/desk/settings", json={"values": {pid: {"askBot.botId": {"value": "bot-99"}, "askBot.nope": {"value": "x"}}, "ghost": {"a.b": {"value": 1}}}})
+    assert r.json()["values"] == {pid: {"askBot.botId": {"value": "bot-99"}}}
+    eff = r.json()["effective_values"]
+    assert eff == [{"backend": pid, "backend_name": "Bot", "tool": "askBot", "alias": "", "param": "botId", "kind": "value", "value": "bot-99", "enabled": True,
+                    "inherited": True, "backend_value": "bot-77", "backend_kind": "default", "backend_enabled": True, "changed": True}]
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "botId" not in ask["properties"], "fixed on this gateway"
+        await c.call_tool("bot_askBot", {"query": "g", "botId": "bot-78"}); assert CALLS[-1][1]["botId"] == "bot-99"
+    # Switched off on the gateway only: the model sees botId again with no default, and its value is sent as given.
+    await admin.put("/api/endpoints/desk/settings", json={"values": {pid: {"askBot.botId": {"enabled": False}}}})
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "botId" in ask["properties"] and "default" not in ask["properties"]["botId"]
+        await c.call_tool("bot_askBot", {"query": "g", "botId": "bot-78"}); assert CALLS[-1][1]["botId"] == "bot-78"
+    # Back to inheriting: the backend's default is in force again.
+    await admin.put("/api/endpoints/desk/settings", json={"values": {}})
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        assert {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema["properties"]["botId"]["default"] == "bot-77"
+
 
 async def test_backend_workflows_are_inherited_and_optional(admin, served):
     pid = await setup(admin)

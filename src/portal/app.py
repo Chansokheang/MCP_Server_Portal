@@ -1159,6 +1159,7 @@ def _endpoint_public(state: dict, key: str) -> dict:
     return {"key": key or "_shared", "require_token": own.get("require_token"), "instructions": own.get("instructions") or "",
             "param_sources": own.get("param_sources") or {}, "workflows": own.get("workflows") or [],
             "inherited_workflows": [w for w in guidance.workflows_for(state, key) if w.get("backend")],
+            "values": own.get("values") or {}, "effective_values": guidance.effective_values(state, key),
             **policy_store.endpoint_policy(state, key)}
 
 
@@ -1194,6 +1195,8 @@ async def put_endpoint_settings(request: Request):
             if parsed or cleared:
                 overrides[pid] = {**cleared, **parsed}
         own["param_sources"] = overrides
+    if "values" in body and isinstance(body["values"], dict):
+        own["values"] = guidance.parse_gateway_values(body["values"], state)
     if "workflows" in body and isinstance(body["workflows"], list):
         flows, names = [], set()
         for spec in body["workflows"]:
@@ -1276,6 +1279,7 @@ async def provider_params(request: Request):
             seen = sorted(learned.get(key, {}).items(), key=lambda kv: -kv[1])
             if key in confirmed or seen:
                 origins.append({"tool": tool, "param": param, "confirmed": confirmed.get(key), "fixed": "value" in (confirmed.get(key) or {}),
+                                "default": "default" in (confirmed.get(key) or {}), "enabled": (confirmed.get(key) or {}).get("enabled") is not False,
                                 "seen": [{"origin": o, "count": c} for o, c in seen[:3]]})
     origins.sort(key=lambda o: (o["confirmed"] is None, -(o["seen"][0]["count"] if o["seen"] else 0), o["tool"], o["param"]))
     return JSONResponse({"items": items, "sources": guidance.CALLER_SOURCES, "kinds": list(guidance.KINDS), "origins": origins,

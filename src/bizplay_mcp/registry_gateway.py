@@ -215,7 +215,8 @@ class GovernanceMiddleware(Middleware):
             # Parameters the gateway fills in (caller identity, fixed values) leave the schema; defaults and
             # origins ("get it from listBots") are written into it, where the model reads them when choosing.
             hidden, defaults = guidance.resolve_sources(guidance.sources_for(provider, state, key), principal.user_id, principal.claims, principal.source)
-            hidden = {**hidden, **guidance.fixed_for_tool(provider, parts[1])}
+            typed_fixed, typed_defaults = guidance.typed_for(provider, parts[1], state, key)
+            hidden, defaults = {**hidden, **typed_fixed}, {**defaults, **typed_defaults}
             shaped = guidance.shape_schema(tool.parameters, set(hidden), defaults, guidance.origin_hints(provider, parts[1]))
             if shaped is not tool.parameters:
                 update["parameters"] = shaped
@@ -341,7 +342,8 @@ class GovernanceMiddleware(Middleware):
         # Parameter sources: caller identity and fixed values replace whatever the model sent; defaults fill gaps.
         provider = state["providers"][pid]
         hidden, defaults = guidance.resolve_sources(guidance.sources_for(provider, state, endpoint_key), principal.user_id, principal.claims, principal.source)
-        hidden = {**hidden, **guidance.fixed_for_tool(provider, op)}
+        typed_fixed, typed_defaults = guidance.typed_for(provider, op, state, endpoint_key)
+        hidden, defaults = {**hidden, **typed_fixed}, {**defaults, **typed_defaults}
         takes = set((provider["tools"].get(op) or {}).get("params") or [])
         fill = {k: v for k, v in hidden.items() if k in takes}
         fill.update({k: v for k, v in defaults.items() if k in takes and arguments.get(k) in (None, "")})
