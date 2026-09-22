@@ -267,7 +267,14 @@ class GovernanceMiddleware(Middleware):
         scope: dict[str, Any] = {"input": arguments, "steps": []}
         last: ToolResult | None = None
         for i, step in enumerate(wf["steps"]):
-            args = guidance.render(step.get("args") or {}, scope)
+            raw = step.get("args") or {}
+            args = guidance.render(raw, scope)
+            # A reference to an earlier step that resolved to nothing: say so, instead of letting the step fail obscurely.
+            empty = [k for k, v in args.items() if v is None and isinstance(raw.get(k), str) and "{{steps." in raw[k]]
+            if empty:
+                prev = wf["steps"][i - 1]["tool"] if i else "the input"
+                raise ToolError(f"{wf['name']} stopped at step {i + 1} ({step['tool']}): {prev} returned nothing to fill {', '.join(empty)}. "
+                                f"The previous step's result was empty for this user or company.")
             args = {k: v for k, v in args.items() if v is not None}
             step_ctx = context.copy(message=context.message.model_copy(update={"name": step["tool"], "arguments": args}))
             try:

@@ -219,7 +219,16 @@ def save(state: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+        # On Windows a sync client or antivirus may hold the file for a moment; the rename then fails
+        # with PermissionError. A few short retries cover it; Linux never needs them.
+        for attempt in range(6):
+            try:
+                tmp.replace(path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
 
 def reset() -> dict:
