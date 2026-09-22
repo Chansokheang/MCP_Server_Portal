@@ -1604,10 +1604,7 @@ pages.gateway = async () => {
   const drafts = ep.backends.filter((p) => p.status !== "published");
   const settingsKey = ep.id || "_shared";
   const [es, known] = await Promise.all([api("GET", `/api/endpoints/${settingsKey}/settings`), api("GET", "/api/groups")]);
-  const previewAs = hashParam("as") || "";
-  const [told, people] = await Promise.all([
-    api("GET", `/api/endpoints/${settingsKey}/instructions${previewAs ? `?as=${encodeURIComponent(previewAs)}` : ""}`).catch(() => ({ text: "", backends: [] })),
-    isAdmin() ? api("GET", "/api/users").then((u) => u.items).catch(() => []) : Promise.resolve([])]);
+  const told = await api("GET", `/api/endpoints/${settingsKey}/instructions`).catch(() => ({ text: "", backends: [] }));
   const via = { url: ep.url, prefix: "", standalone: ep.standalone, label: ep.name, needsToken: es.require_token };
   const guides = clientGuides({ id: ep.id || "bizplay-gateway", name: ep.name, has_spec: true, kind: "openapi", tool_prefix: "" }, tools, via);
   const key = guides[hashParam("c")] ? hashParam("c") : "claude-desktop";
@@ -1660,8 +1657,9 @@ pages.gateway = async () => {
           <div class="setting-ctl"><input id="es-groups" class="ctl-wide" value="${esc(es.access.groups.join(", "))}" placeholder="finance, hr"></div></div>
         <div class="setting ${es.access.mode === "companies" ? "" : "hidden"}" id="es-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids from the caller's token.</p></div>
           <div class="setting-ctl"><input id="es-companies" class="ctl-wide" value="${esc(es.access.companies.join(", "))}" placeholder="1234567890"></div></div>
-        <div class="setting stacked"><div class="setting-text"><strong>Instructions for the model</strong><p class="muted small">The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are added underneath.</p></div>
-          <div class="setting-ctl"><textarea id="es-instructions" rows="3" style="width:100%;min-height:72px" placeholder="You are the assistant for this team. Say which backend to use for which kind of question.">${esc(es.instructions || "")}</textarea></div></div>
+        <div class="setting stacked"><div class="setting-text"><strong>Instructions for the model</strong><p class="muted small">The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are sent after your text; they are shown below and edited on the backend's page.</p></div>
+          <div class="setting-ctl"><textarea id="es-instructions" rows="3" style="width:100%;min-height:72px" placeholder="You are the assistant for this team. Say which backend to use for which kind of question.">${esc(es.instructions || "")}</textarea>
+            ${(told.backends || []).length ? `<div class="told-list">${told.backends.map((b) => `<div class="told-item"><div class="small"><a href="#provider?p=${esc(b.id)}">${esc(b.name)}</a>${b.has_notes ? "" : `: <strong>no usage notes</strong> <span class="muted">so the model has only tool names and descriptions to go on; add them on its page.</span>`}${Object.keys(b.bound || {}).length ? `<span class="muted"> · fills in ${esc(Object.keys(b.bound).join(", "))} from the caller</span>` : ""}</div>${b.has_notes ? `<pre class="told">${esc(b.notes)}</pre>` : ""}</div>`).join("")}</div>` : ""}</div></div>
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Token lifetime, the public address and upstream credentials stay on the Security page; they are not per gateway.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
       </div>
@@ -1671,14 +1669,6 @@ pages.gateway = async () => {
       ${workflowTable(es.workflows || [], es.inherited_workflows || [], "A workflow is a fixed sequence of tools published as one extra tool. The gateway runs the steps in order; the model may use it or call the tools itself. Workflows defined on a backend's page appear here too.")}
     </div>` : ""}
     ${isAdmin() ? gatewayValuesSection(es, told) : ""}
-    <div id="told">
-      <div class="section-head"><h2 class="section-title">What the model is told</h2>
-        ${isAdmin() ? `<label class="muted small" style="display:flex;align-items:center;gap:8px">Preview as <select id="told-as"><option value="">a caller with no token</option>${people.map((u) => `<option value="${esc(u.id)}" ${u.id === previewAs ? "selected" : ""}>${esc(u.name)} · ${esc(u.id)}</option>`).join("")}</select></label>` : ""}</div>
-      <div class="card">
-        ${told.text ? `<pre class="told">${esc(told.text)}</pre>` : emptyState("chat-text", "Nothing yet", "Add instructions above, or usage notes on a backend's page. Without them a model has only tool names and descriptions to go on.")}
-        ${(told.backends || []).length ? `<p class="muted small" style="margin:10px 0 0">${told.backends.map((b) => `<a href="#provider?p=${esc(b.id)}">${esc(b.name)}</a>: ${b.has_notes ? "usage notes" : "<strong>no usage notes</strong>"}${Object.keys(b.bound).length ? `, fills in ${esc(Object.keys(b.bound).join(", "))}` : ""}`).join(" · ")}</p>` : ""}
-      </div>
-    </div>
     <div>
       <div class="section-head"><h2 class="section-title">How to connect</h2>${es.require_token ? chip("green", "Agent token required", "key") : chip("amber", "No token: every caller is the demo user", "warning")}</div>
       <div class="card" style="margin-bottom:12px">
@@ -1710,7 +1700,6 @@ pages.gateway = async () => {
   bindWorkflows(es.workflows || [], (told.backends || []).flatMap((b) => b.tools.filter((t) => t.enabled).map((t) => ({ name: (t.prefix || "") + (t.alias || t.name), params: t.params }))),
     (next) => api("PUT", `/api/endpoints/${settingsKey}/settings`, { workflows: next }), pages.gateway);
   bindGatewayValues(es, told, settingsKey);
-  if ($("#told-as")) $("#told-as").onchange = (e) => { const q = Object.fromEntries(new URLSearchParams(location.hash.split("?")[1] || "")); if (e.target.value) q.as = e.target.value; else delete q.as; setHash("gateway", q); pages.gateway(); };
   if ($("#es-save")) $("#es-save").onclick = async () => {
     try {
       const v = $("#es-require").value;

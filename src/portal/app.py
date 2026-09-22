@@ -1298,8 +1298,9 @@ async def endpoint_instructions(request: Request):
     claims = {"company": user.get("company"), "role": user.get("role"), "groups": user.get("groups", [])} if user else None
     text = guidance.compose_instructions(state, key, user["id"] if user else "", claims, "bearer" if user else "env")
     return JSONResponse({"key": key, "as": user["id"] if user else None, "text": text,
-                         "backends": [{"id": b["id"], "name": b["name"], "has_notes": bool(b.get("instructions")),
-                                       "bound": {n: v for n, v in guidance.sources_for(b, state, key).items()},
+                         "backends": [{"id": b["id"], "name": b["name"], "has_notes": bool(b.get("instructions")), "notes": guidance.clean_instructions(b.get("instructions")) or "",
+                                       "bound": {n: v for n, v in guidance.sources_for(b, state, key).items()
+                                                 if n in {q for r in b["tools"].values() if r.get("enabled") for q in r.get("params") or []}},
                                        "tools": [{"name": n, "alias": r.get("alias") or "", "params": r.get("params") or [], "enabled": r["enabled"],
                                                   "prefix": (b.get("tool_prefix") or "") if key in state["gateways"] or not key else ""}
                                                  for n, r in b["tools"].items()]}
