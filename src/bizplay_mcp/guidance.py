@@ -105,8 +105,14 @@ def parse_bindings(value: Any) -> dict[str, str]:
 
 
 def sources_for(provider: dict, state: dict | None = None, key: str = "") -> dict[str, dict]:
-    """Effective parameter sources for a backend on an endpoint: the backend's, then the gateway's overrides."""
-    own = dict(provider.get("param_sources") or {})
+    """Effective parameter sources for a backend on an endpoint: the backend's, then the gateway's overrides.
+
+    Company parameters (corpNo and the other names in COMPANY_KEYS) are filled in
+    from the caller without any setup: the gateway already limits every call to
+    the caller's company, so asking the model for it only invites a wrong guess.
+    """
+    own = {k: {"kind": "caller", "value": "company"} for k in policy_store.COMPANY_KEYS}
+    own.update(provider.get("param_sources") or {})
     for name, src in (provider.get("bound_params") or {}).items():  # rows from before sources had kinds
         own.setdefault(name, {"kind": "caller", "value": src})
     if state is not None and key:
@@ -200,16 +206,35 @@ def alias_problem(provider: dict, tool: str, alias: str) -> str | None:
 
 # --- where values come from -------------------------------------------------------------
 def parse_comes_from(value: Any, provider: dict) -> dict[str, dict]:
-    """{"tool.param": {"tool": producer, "field": "id"}}; producers must be tools of this backend."""
+    """{"tool.param": {"tool": producer, "field": "id"}} or {"tool.param": {"value": ...}} for a value typed by hand.
+
+    Producers must be tools of this backend. A typed value is sent on every call of
+    that one tool and hidden from the model, like a fixed value but for a single tool.
+    """
     out: dict[str, dict] = {}
     tools = provider.get("tools") or {}
     for key, spec in (value or {}).items() if isinstance(value, dict) else []:
-        if not isinstance(spec, dict) or not spec.get("tool"):
+        if not isinstance(spec, dict):
             continue
         tool, _, param = str(key).partition(".")
-        producer = real_tool_name(provider, str(spec["tool"]))
-        if tool in tools and param and producer in tools:
-            out[f"{tool}.{param}"] = {"tool": producer, "field": str(spec.get("field") or "").strip()}
+        if tool not in tools or not param:
+            continue
+        if spec.get("tool"):
+            producer = real_tool_name(provider, str(spec["tool"]))
+            if producer in tools:
+                out[f"{tool}.{param}"] = {"tool": producer, "field": str(spec.get("field") or "").strip()}
+        elif spec.get("value") not in (None, ""):
+            out[f"{tool}.{param}"] = {"value": _coerce(spec["value"])}
+    return out
+
+
+def fixed_for_tool(provider: dict, tool: str) -> dict[str, Any]:
+    """{param: value} typed by hand for one tool's parameters."""
+    out = {}
+    for key, spec in (provider.get("comes_from") or {}).items():
+        t, _, param = key.partition(".")
+        if t == tool and "value" in spec:
+            out[param] = spec["value"]
     return out
 
 
@@ -218,7 +243,7 @@ def origin_hints(provider: dict, tool: str) -> dict[str, str]:
     out = {}
     for key, spec in (provider.get("comes_from") or {}).items():
         t, _, param = key.partition(".")
-        if t == tool:
+        if t == tool and spec.get("tool"):
             where = f" (field {spec['field']})" if spec.get("field") else ""
             out[param] = f"Get it from {shown_name(provider, spec['tool'])}{where}; do not ask the user for it."
     return out
@@ -228,7 +253,7 @@ def missing_origin_hint(provider: dict, tool: str, arguments: dict) -> str | Non
     """What to call first when a parameter with a known origin was not given."""
     for key, spec in (provider.get("comes_from") or {}).items():
         t, _, param = key.partition(".")
-        if t == tool and arguments.get(param) in (None, ""):
+        if t == tool and spec.get("tool") and arguments.get(param) in (None, ""):
             return f"'{shown_name(provider, tool)}' needs {param}: call {shown_name(provider, spec['tool'])} first and use its {spec.get('field') or 'result'}."
     return None
 
@@ -446,7 +471,9 @@ def compose_instructions(state: dict, key: str, user_id: str = "", claims: dict 
         ok, _ = policy_store.check_provider_access(state, p["id"], claims) if claims is not None else (True, "")
         if not ok:
             continue
-        filled |= set(bound_values(p, user_id, claims, source, state, key))
+        takes = {q for row in p.get("tools", {}).values() if row.get("enabled") for q in row.get("params") or []}
+        filled |= set(bound_values(p, user_id, claims, source, state, key)) & takes
+        filled |= {k.partition(".")[2] for k, spec in (p.get("comes_from") or {}).items() if "value" in spec and p["tools"].get(k.partition(".")[0], {}).get("enabled")}
         notes = clean_instructions(p.get("instructions"))
         if notes:
             prefix = "" if standalone else f" (tools named `{p.get('tool_prefix') or p['id'].replace('-', '_') + '_'}*`)"

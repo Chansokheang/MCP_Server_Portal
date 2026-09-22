@@ -136,6 +136,18 @@ async def test_origins_are_learned_from_real_calls_then_confirmed(admin, served)
         with pytest.raises(ToolError, match="call findBots first"):
             await c.call_tool("bot_askBot", {"query": "no id"})
 
+    # A value typed in by hand: sent on every call of that tool, hidden from the model, and reported as such.
+    r = await admin.patch(f"/api/registry/{pid}", json={"comes_from": {"askBot.botId": {"value": "bot-78"}}})
+    assert r.json()["comes_from"] == {"askBot.botId": {"value": "bot-78"}}
+    origin = next(o for o in (await admin.get(f"/api/registry/{pid}/params")).json()["origins"] if o["param"] == "botId")
+    assert origin["fixed"] is True
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "botId" not in ask["properties"] and "botId" in c.instructions
+        assert (await c.call_tool("bot_askBot", {"query": "fixed"})).structured_content["data"]["answer"] == "echo: fixed"
+        assert CALLS[-1][1]["botId"] == "bot-78"
+        assert (await c.call_tool("bot_askBot", {"query": "x", "botId": "bot-77"})).structured_content and CALLS[-1][1]["botId"] == "bot-78", "never overridden by the model"
+
 
 async def test_backend_workflows_are_inherited_and_optional(admin, served):
     pid = await setup(admin)

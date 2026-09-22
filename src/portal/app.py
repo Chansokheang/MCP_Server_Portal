@@ -388,7 +388,9 @@ def _public_provider(p: dict) -> dict:
                                   "signed_in_at": cached.get("signed_in_at"), "expires_at": cached.get("expires_at")}
     out["has_spec"] = bool(p.get("spec"))
     out["instructions"] = p.get("instructions") or ""
-    out["param_sources"] = guidance.sources_for(p)
+    takes = {q for row in p["tools"].values() for q in row.get("params") or []}
+    explicit = set(p.get("param_sources") or {}) | set(p.get("bound_params") or {})
+    out["param_sources"] = {n: v for n, v in guidance.sources_for(p).items() if n in takes or n in explicit}
     out["bound_params"] = {n: v["value"] for n, v in out["param_sources"].items() if v["kind"] == "caller"}
     out["comes_from"] = p.get("comes_from") or {}
     out["workflows"] = p.get("workflows") or []
@@ -1260,8 +1262,9 @@ async def provider_params(request: Request):
         for name in row.get("params") or []:
             counts[name] = counts.get(name, 0) + 1
     sources = guidance.sources_for(p)
+    explicit = set(p.get("param_sources") or {}) | set(p.get("bound_params") or {})
     items = [{"name": n, "tools": c, "source": sources.get(n), "bound": (sources.get(n) or {}).get("value") if (sources.get(n) or {}).get("kind") == "caller" else None,
-              "suggested": guidance.suggested_source(n)} for n, c in counts.items()]
+              "implicit": n in sources and n not in explicit, "suggested": guidance.suggested_source(n)} for n, c in counts.items()]
     items.sort(key=lambda i: (i["source"] is None, i["suggested"] is None, -i["tools"], i["name"]))
     # Origins: confirmed rows, plus what real calls showed (a value returned by one tool used by another).
     confirmed = p.get("comes_from") or {}
@@ -1272,7 +1275,7 @@ async def provider_params(request: Request):
             key = f"{tool}.{param}"
             seen = sorted(learned.get(key, {}).items(), key=lambda kv: -kv[1])
             if key in confirmed or seen:
-                origins.append({"tool": tool, "param": param, "confirmed": confirmed.get(key),
+                origins.append({"tool": tool, "param": param, "confirmed": confirmed.get(key), "fixed": "value" in (confirmed.get(key) or {}),
                                 "seen": [{"origin": o, "count": c} for o, c in seen[:3]]})
     origins.sort(key=lambda o: (o["confirmed"] is None, -(o["seen"][0]["count"] if o["seen"] else 0), o["tool"], o["param"]))
     return JSONResponse({"items": items, "sources": guidance.CALLER_SOURCES, "kinds": list(guidance.KINDS), "origins": origins,

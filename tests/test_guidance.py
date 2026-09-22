@@ -78,15 +78,17 @@ async def test_two_backends_one_gateway_guided_end_to_end(admin, served):
 
     # The portal lists each backend's parameters with a suggestion, never a silent default.
     params = {i["name"]: i for i in (await admin.get(f"/api/registry/{chatbot}/params")).json()["items"]}
-    assert params["corpNo"]["suggested"] == "company" and params["employeeId"]["suggested"] == "user" and params["corpNo"]["bound"] is None
+    assert params["corpNo"]["suggested"] == "company" and params["employeeId"]["suggested"] == "user"
+    assert params["corpNo"]["bound"] == "company", "company parameters are bound from the start"
     assert params["question"]["suggested"] is None
 
     # Guidance is per backend, so every gateway that serves the backend inherits it.
     r = await admin.patch(f"/api/registry/{chatbot}", json={
         "instructions": "To answer a policy question: 1) listBots to get a botId, 2) askBot with that id. Never ask the user for a botId.",
-        "bound_params": {"corpNo": "company", "employeeId": "user", "nonsense": "moon"}})
-    assert r.status_code == 200 and r.json()["bound_params"] == {"corpNo": "company", "employeeId": "user"}
-    await admin.patch(f"/api/registry/{billing}", json={"instructions": "Invoices are per company.", "bound_params": [{"name": "corpNo", "source": "company"}]})
+        "bound_params": {"employeeId": "user", "nonsense": "moon"}})
+    assert r.status_code == 200 and r.json()["bound_params"] == {"corpNo": "company", "employeeId": "user"}, "corpNo is filled in without any setup"
+    assert params["corpNo"]["implicit"] is True
+    await admin.patch(f"/api/registry/{billing}", json={"instructions": "Invoices are per company."})
     await admin.patch(f"/api/registry/{other}", json={"instructions": "NOT IN THIS GATEWAY"})
 
     # Tool names the model can read.
@@ -138,9 +140,10 @@ async def test_two_backends_one_gateway_guided_end_to_end(admin, served):
         assert "Billing" not in c.instructions and "listBots to get a botId" in c.instructions
         assert (await c.call_tool("listBots", {})).structured_content["corpNo"] == "1078836129"
 
-    # Removing an alias and a binding restores the originals.
+    # Removing an alias restores the original name; the company stays filled in, since that needs no setup.
     await admin.put(f"/api/registry/{chatbot}/tools/list_2", json={"alias": ""})
     await admin.patch(f"/api/registry/{chatbot}", json={"bound_params": {}})
     async with Client(StreamableHttpTransport(f"{served}/mcp/help-desk", auth=minji)) as c:
         tools = {t.name: t for t in await c.list_tools()}
-        assert "chatbot_list_2" in tools and "corpNo" in tools["chatbot_list_2"].input_schema["properties"]
+        assert "chatbot_list_2" in tools and "corpNo" not in tools["chatbot_list_2"].input_schema["properties"]
+        assert "employeeId" in tools["chatbot_askBot"].input_schema["properties"], "the explicit binding was removed"

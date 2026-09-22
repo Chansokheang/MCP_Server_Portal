@@ -132,13 +132,13 @@ async def test_without_a_company_scoping_is_skipped_not_refused(open_provider, m
 
 
 async def test_cannot_name_another_company_in_arguments(admin, open_provider, as_company):
+    """A company parameter is filled in from the caller: whatever the model names, its own company goes upstream."""
     as_company("1078836129")
-    await admin.put(f"/api/registry/{open_provider}/tools/deleteCorpByCorpNo", json={"enabled": True})
     async with Client(gateway()) as c:
-        with pytest.raises(ToolError, match="not the caller's company"):
-            await c.call_tool("open_corp_api_getCorpByCorpNo", {"corpNo": "2200000000"})
-        with pytest.raises(ToolError, match="not the caller's company"):
-            await c.call_tool("open_corp_api_deleteCorpByCorpNo", {"corpNo": "2200000000"})
+        tools = {t.name: t for t in await c.list_tools()}
+        assert "corpNo" not in tools["open_corp_api_getCorpByCorpNo"].input_schema.get("properties", {}), "the model never sees it"
+        other = await c.call_tool("open_corp_api_getCorpByCorpNo", {"corpNo": "2200000000"})
+        assert other.structured_content["payload"]["corpNo"] == "1078836129", "a stale or wrong value is replaced, not forwarded"
         own = await c.call_tool("open_corp_api_getCorpByCorpNo", {"corpNo": "1078836129"})
         assert own.structured_content["payload"]["corpName"] == "DemoCorp01"
 

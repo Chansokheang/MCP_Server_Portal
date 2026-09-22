@@ -63,7 +63,6 @@ def main() -> None:
 
     r = c.patch(f"/api/registry/{args.backend}", json={
         "instructions": NOTES,
-        "param_sources": {"corpNo": {"kind": "caller", "value": "company"}},
         # Which tool produces which id: written into askBot's description, and into the error when botId is missing.
         "comes_from": {"chat.botId": {"tool": "listByCorp", "field": "id"}, "history.sessionId": {"tool": "chat", "field": "sessionId"},
                        "get_2.id": {"tool": "listByCorp", "field": "id"}, "listRecommendedQuestions.id": {"tool": "listByCorp", "field": "id"},
@@ -72,7 +71,7 @@ def main() -> None:
     guided = "instructions" in r.json()
     named = any(t.get("alias") for t in c.get(f"/api/registry/{args.backend}/tools").json()["items"])
     if guided:
-        print(f"backend: usage notes set, bound parameters {r.json().get('bound_params')}, readable tool names {'set' if named else 'NOT set'}")
+        print(f"backend: usage notes set, company filled in from the caller, readable tool names {'set' if named else 'NOT set'}")
     else:
         print("backend: this portal is older than the guidance release, so names, notes and bindings were ignored. Upgrade, then run this again.")
 

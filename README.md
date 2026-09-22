@@ -199,15 +199,16 @@ kept **per backend** so every gateway that serves the backend inherits them:
 
 Three more per-backend settings, with per-gateway overrides:
 
-- **Parameter sources.** For each parameter: asked from the model (the
-  default), filled from the caller (company, user id, role), a **fixed**
-  value the model never sees, or a **default** used when the model leaves it
-  out. A gateway can override a value for its own team, or clear a backend's
-  setting there.
+- **Company parameters are filled in from the caller**, with no setup: any
+  parameter named like `corpNo` (the names in `BIZPLAY_COMPANY_KEYS`) leaves
+  the tool schema and the caller's own company goes upstream, whatever the
+  model sends. The API still accepts explicit sources per parameter (caller
+  identity, fixed, default) and per-gateway overrides for teams that need them.
 - **Which tool produces which id.** `askBot.botId` comes from `listBots`,
   field `id`. The gateway writes "get it from listBots" into the tool's
   description and, when a call arrives without the value, tells the model
-  what to call first. Rows are stated by an admin or **learned from real
+  what to call first. Or type the value in by hand: it is then sent on every
+  call of that tool and hidden from the model. Rows are stated by an admin or **learned from real
   calls**: within a session the gateway remembers the values each tool
   returned, and when a later call uses one of them, that is an observed link
   (counted, never applied until confirmed). It works across backends too.
