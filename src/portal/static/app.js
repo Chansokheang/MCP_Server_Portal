@@ -539,7 +539,7 @@ function gatewayDialog(g, servable) {
   const picked = new Set(g ? g.backends.map((b) => b.id) : []);
   modal(`<h2><i class="ph ph-squares-four"></i> ${g ? "Edit gateway" : "New gateway"}</h2>
     <form id="gw-form" class="form">
-      <label class="field">Name <input name="name" value="${esc(g?.name || "")}" placeholder="e.g. Finance Suite" required ${g ? "readonly" : ""}>
+      <label class="field">Name <input name="name" value="${esc(g?.name || "")}" placeholder="e.g. Sales Team" required ${g ? "readonly" : ""}>
         ${g ? "" : `<span class="muted small">Becomes the address: ${esc(SERVER.public_mcp_url || location.origin + "/mcp")}/&lt;name&gt;</span>`}</label>
       <label class="field">Description <input name="description" value="${esc(g?.description || "")}" placeholder="who this gateway is for"></label>
       <div class="field"><span>Backends served</span>
@@ -655,7 +655,7 @@ async function registerDialog(opts = {}) {
         <label class="seg-opt"><input type="radio" name="kind" value="openapi" checked><i class="ph ph-cloud"></i><span><strong>REST API</strong><span>Paste its OpenAPI spec. The gateway generates the tools.</span></span></label>
         <label class="seg-opt"><input type="radio" name="kind" value="mcp"><i class="ph ph-plugs-connected"></i><span><strong>Existing MCP server</strong><span>Give its URL. The gateway proxies its tools.</span></span></label>
       </div>
-      <label class="field">Provider name <input name="name" placeholder="e.g. Bizplay HR API" required></label>
+      <label class="field">Provider name <input name="name" placeholder="e.g. Orders API" required></label>
       <label class="field"><span id="reg-base-label">Base URL of the existing API</span> <input name="base_url" id="reg-base" placeholder="https://api.example.com" required></label>
       <label class="field"><span id="reg-mode-label">How is the API protected?</span>
         <select name="auth_mode" id="reg-mode">
@@ -894,9 +894,9 @@ function guidanceSection(p, params) {
       <div class="section-head"><h2 class="section-title">Guidance for the model</h2>${p.instructions ? chip("green", "Usage notes set", "check") : chip("amber", "No usage notes", "warning")}${Object.keys(p.comes_from || {}).length ? chip("lilac", `${Object.keys(p.comes_from).length} origin(s)`, "flow-arrow") : ""}</div>
       <div class="card settings-list">
         <div class="setting stacked"><div class="setting-text"><strong>How to use this backend</strong><p class="muted small">Sent to the model when it connects, on every gateway that serves this backend. Say which tool to call first and which next, in plain steps, and what never to ask the user for.</p></div>
-          <div class="setting-ctl"><textarea id="gd-notes" rows="5" style="width:100%;min-height:110px" placeholder="To answer a policy question: 1) listBots to find the company's bots, 2) askBot with the botId. Never ask the user for a botId or a company number.">${esc(p.instructions || "")}</textarea></div></div>
+          <div class="setting-ctl"><textarea id="gd-notes" rows="5" style="width:100%;min-height:110px" placeholder="To answer a question: 1) call the list tool to find the right item, 2) call the detail tool with its id. Never ask the user for an id or a company number.">${esc(p.instructions || "")}</textarea></div></div>
         <div class="setting"><div class="setting-text"><strong>Filled in from the signed-in user</strong><p class="muted small">${params.items.some((x) => x.implicit) ? `The gateway fills in <span class="mono">${esc(params.items.filter((x) => x.implicit).map((x) => x.name).join(", "))}</span> from the caller's company on every call and never shows ${params.items.filter((x) => x.implicit).length > 1 ? "them" : "it"} to the model, so the model cannot ask for the wrong company.` : "This backend's tools take no company parameter, so nothing is filled in automatically."}</p></div></div>
-        <div class="setting stacked"><div class="setting-text"><strong>Which tool produces which id</strong><p class="muted small">"askBot needs a botId, which listBots returns in field id." This is a fact about the API, so it holds on every gateway: the gateway writes it into the tool's description and, when a call arrives without the value, tells the model what to call first. Rows marked seen were observed in real calls: a value one tool returned was used by another. A fixed value or a default for a parameter depends on who is using it, so those are set on each gateway's page.</p></div>
+        <div class="setting stacked"><div class="setting-text"><strong>Which tool produces which id</strong><p class="muted small">"getItem needs an itemId, which listItems returns in field id." This is a fact about the API, so it holds on every gateway: the gateway writes it into the tool's description and, when a call arrives without the value, tells the model what to call first. Rows marked seen were observed in real calls: a value one tool returned was used by another. A fixed value or a default for a parameter depends on who is using it, so those are set on each gateway's page.</p></div>
           <div class="setting-ctl"><div class="table-wrap"><table id="gd-origins">
             <tr><th>Parameter</th><th>Comes from</th><th></th><th>Observed</th></tr>
             ${params.origins.map(originRow).join("")}
@@ -1010,7 +1010,7 @@ function accessSection(p, d, known, params) {
         <div class="setting ${access.mode === "groups" ? "" : "hidden"}" id="acc-groups-row"><div class="setting-text"><strong>Access groups</strong><p class="muted small">Comma separated. A caller needs any one of them on their agent token${known.length ? `. In use: ${esc(known.join(", "))}` : ""}.</p></div>
           <div class="setting-ctl"><input id="acc-groups" class="ctl-wide" value="${esc(access.groups.join(", "))}" placeholder="finance, hr" list="acc-known"><datalist id="acc-known">${known.map((g) => `<option value="${esc(g)}">`).join("")}</datalist></div></div>
         <div class="setting ${access.mode === "companies" ? "" : "hidden"}" id="acc-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids, matched against the company on the caller's token.</p></div>
-          <div class="setting-ctl"><input id="acc-companies" class="ctl-wide" value="${esc(access.companies.join(", "))}" placeholder="1078836129, 2200000000"></div></div>
+          <div class="setting-ctl"><input id="acc-companies" class="ctl-wide" value="${esc(access.companies.join(", "))}" placeholder="1234567890, 9876543210"></div></div>
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Applies on the next call, on the shared gateway, named gateways and this backend's own MCP server alike.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="acc-save"><i class="ph ph-check"></i> Save entitlement</button></div></div>
       </div>
@@ -1126,8 +1126,8 @@ function userPicker(users, selected) {
       <span class="muted small">Role, company and groups come from the <a href="#users">Users</a> page, so they cannot disagree with the token.</span></label>
     <div class="pick-preview" id="pick-preview"></div>
     <div id="pick-new" class="form-2 hidden">
-      <label class="field">Bizplay user id <input name="new_id" placeholder="emp003" pattern="[a-z0-9_-]+"><span class="muted small">Added to the Users page as well.</span></label>
-      <label class="field">Name <input name="new_name" placeholder="Choi Yuna"></label>
+      <label class="field">Bizplay user id <input name="new_id" placeholder="u1001" pattern="[a-z0-9_-]+"><span class="muted small">Added to the Users page as well.</span></label>
+      <label class="field">Name <input name="new_name" placeholder="Full name"></label>
       <label class="field">Role <select name="new_role"><option value="employee">employee</option><option value="manager">manager</option></select></label>
       <label class="field">Access groups <input name="new_groups" placeholder="finance, hr (comma separated)"></label>
     </div>`;
@@ -1541,17 +1541,17 @@ function workflowDialog(index, workflows, allTools, save, after) {
   const stepRow = (s, i) => `<div class="wf-step" data-i="${i}"><div class="form-2" style="grid-template-columns:auto 1fr auto;align-items:start">
       <strong style="padding-top:9px">${i + 1}.</strong>
       <div class="field"><select data-k="tool">${toolOpts(s.tool)}</select>
-        <textarea data-k="args" rows="2" style="min-height:44px" placeholder='{"botId": "{{steps.0.data.0.id}}", "query": "{{input.question}}"}'>${esc(Object.keys(s.args || {}).length ? JSON.stringify(s.args) : "")}</textarea>
+        <textarea data-k="args" rows="2" style="min-height:44px" placeholder='{"itemId": "{{steps.0.data.0.id}}", "query": "{{input.query}}"}'>${esc(Object.keys(s.args || {}).length ? JSON.stringify(s.args) : "")}</textarea>
         <span class="muted small" data-k="hint"></span></div>
       <button type="button" class="btn small danger" data-k="del" style="margin-top:6px"><i class="ph ph-x"></i></button></div></div>`;
   modal(`<h2><i class="ph ph-flow-arrow"></i> ${index == null ? "New workflow" : `Edit ${esc(wf.name)}`}</h2>
     <p class="muted">Published as one tool. The gateway runs the steps in order and every step passes through entitlement, tool policy and the audit log as usual. Arguments may use <span class="mono">{{input.name}}</span> for an input and <span class="mono">{{steps.0.data.0.id}}</span> for a field of an earlier step's result.</p>
     <form id="wf-form" class="form">
       <div class="form-2">
-        <label class="field">Tool name the model sees <input name="name" value="${esc(wf.name)}" placeholder="askCompanyBot" pattern="[A-Za-z][A-Za-z0-9_]{1,50}" required></label>
-        <label class="field">What it does, for the model <input name="description" value="${esc(wf.description)}" placeholder="Ask the company's chatbot a question and return its answer."></label>
+        <label class="field">Tool name the model sees <input name="name" value="${esc(wf.name)}" placeholder="searchThenGetDetails" pattern="[A-Za-z][A-Za-z0-9_]{1,50}" required></label>
+        <label class="field">What it does, for the model <input name="description" value="${esc(wf.description)}" placeholder="Find the matching item and return its details."></label>
       </div>
-      <label class="field">Inputs, one per line as name: description <textarea name="inputs" rows="2" style="min-height:52px" placeholder="question: The user's question">${esc(Object.entries(wf.inputs || {}).map(([k, v]) => `${k}: ${v.description || ""}`).join("\n"))}</textarea></label>
+      <label class="field">Inputs, one per line as name: description <textarea name="inputs" rows="2" style="min-height:52px" placeholder="query: What the user is looking for">${esc(Object.entries(wf.inputs || {}).map(([k, v]) => `${k}: ${v.description || ""}`).join("\n"))}</textarea></label>
       <div id="wf-steps">${wf.steps.map(stepRow).join("")}</div>
       <div><button type="button" class="btn small" id="wf-step-add"><i class="ph ph-plus"></i> Add step</button></div>
       <label class="field">Result to return (optional) <input name="output" value="${esc(wf.output || "")}" placeholder="steps.1.data  (blank returns the last step's result)"></label>
@@ -1659,9 +1659,9 @@ pages.gateway = async () => {
         <div class="setting ${es.access.mode === "groups" ? "" : "hidden"}" id="es-groups-row"><div class="setting-text"><strong>Access groups</strong><p class="muted small">Comma separated${known.items.length ? `. In use: ${esc(known.items.join(", "))}` : ""}.</p></div>
           <div class="setting-ctl"><input id="es-groups" class="ctl-wide" value="${esc(es.access.groups.join(", "))}" placeholder="finance, hr"></div></div>
         <div class="setting ${es.access.mode === "companies" ? "" : "hidden"}" id="es-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids from the caller's token.</p></div>
-          <div class="setting-ctl"><input id="es-companies" class="ctl-wide" value="${esc(es.access.companies.join(", "))}" placeholder="1078836129"></div></div>
+          <div class="setting-ctl"><input id="es-companies" class="ctl-wide" value="${esc(es.access.companies.join(", "))}" placeholder="1234567890"></div></div>
         <div class="setting stacked"><div class="setting-text"><strong>Instructions for the model</strong><p class="muted small">The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are added underneath.</p></div>
-          <div class="setting-ctl"><textarea id="es-instructions" rows="3" style="width:100%;min-height:72px" placeholder="You are the finance help desk. Use FLOW for project questions and the chatbot for company policy.">${esc(es.instructions || "")}</textarea></div></div>
+          <div class="setting-ctl"><textarea id="es-instructions" rows="3" style="width:100%;min-height:72px" placeholder="You are the assistant for this team. Say which backend to use for which kind of question.">${esc(es.instructions || "")}</textarea></div></div>
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Token lifetime, the public address and upstream credentials stay on the Security page; they are not per gateway.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
       </div>
@@ -1869,11 +1869,11 @@ async function userDialog(u) {
   modal(`<h2><i class="ph ph-${editing ? "user-gear" : "user-plus"}"></i> ${editing ? `Edit ${esc(u.name)}` : "Add a user"}</h2>
     <form id="usr-form" class="form">
       <div class="form-2">
-        <label class="field">Bizplay user id <input name="id" value="${esc(u?.id || "")}" placeholder="emp003" pattern="[a-z0-9_-]+" ${editing ? "disabled" : "required"}><span class="muted small">What agent tokens carry as the caller and what the audit log shows.</span></label>
-        <label class="field">Name <input name="name" value="${esc(u?.name || "")}" placeholder="Kim Minji" required></label>
-        <label class="field">Email <input name="email" type="email" value="${esc(u?.email || "")}" placeholder="minji@bizplay.co.kr"></label>
+        <label class="field">Bizplay user id <input name="id" value="${esc(u?.id || "")}" placeholder="u1001" pattern="[a-z0-9_-]+" ${editing ? "disabled" : "required"}><span class="muted small">What agent tokens carry as the caller and what the audit log shows.</span></label>
+        <label class="field">Name <input name="name" value="${esc(u?.name || "")}" placeholder="Full name" required></label>
+        <label class="field">Email <input name="email" type="email" value="${esc(u?.email || "")}" placeholder="name@example.com"></label>
         <label class="field">Role <select name="role"><option value="employee" ${u?.role === "employee" ? "selected" : ""}>employee</option><option value="manager" ${u?.role === "manager" ? "selected" : ""}>manager</option></select></label>
-        <label class="field">Company (corpNo) <input name="company" value="${esc(u?.company || "1078836129")}" placeholder="1078836129"><span class="muted small">The corp number the gateway limits this person's calls and results to.</span></label>
+        <label class="field">Company (corpNo) <input name="company" value="${esc(u?.company || "1078836129")}" placeholder="1234567890"><span class="muted small">The corp number the gateway limits this person's calls and results to.</span></label>
         <label class="field">Access groups <input name="groups" value="${esc((u?.groups || []).join(", "))}" placeholder="finance, hr (comma separated)"></label>
       </div>
       <label class="field">Portal password <input name="password" type="password" placeholder="${editing && u.can_sign_in ? "(unchanged)" : "leave empty: no portal sign-in"}" autocomplete="new-password" minlength="6"><span class="muted small">With a password the person signs in as a member and manages their own tokens and linked accounts.</span></label>
