@@ -135,11 +135,19 @@ the assistant never asked "which bot?".
 
 > **File a domestic trip plan for today, 30 September 2026: Seoul, Bizplay head office, from Osong by KTX and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
-[`planChat`, several turns the assistant holds on its own: purpose chips,
-destination, route, remaining fields, then `corporationUsers` to pick
-김도하 by name, then `createPlan`. The reply carries the document number.
-If the audience includes 김도하, this is the moment to approve it on a
-phone.]
+[`planChat`, several turns the assistant holds on its own: it states the
+traveler, destination, date, route and purpose, answers "no one else
+travels", picks 비즈플레이 as the route stop, names 김도하 at the
+approval-line question and says there is no one else to add. The agent
+then reports SUBMIT_REQUESTED, and the assistant calls `createPlan` on the
+session. The reply: filed, waiting for 김도하.]
+
+This exact conversation was run through the gateway on 23 Sep and produced
+**2026-출장계획서-1738**, "비즈플레이 AI 협업 프로젝트 시연 서울 출장",
+30 Sep, Osong to Seoul by train and back, approver 김도하, status
+DRAFTED. Either have 김도하 approve that one before the day and skip to
+scene 6, or file a second one live; both work. If 김도하 is in the room,
+the live filing is the moment to approve it on a phone.
 
 Point at: the TravelExpense usage notes, the line "Answer them yourself".
 Before those notes the assistant stopped at the first chip and told the
@@ -149,8 +157,8 @@ user to click it in the web app.
 
 > **The trip is done. Settle today's Seoul trip: KTX Osong to Seoul round trip 37,000 won, taxi from Seoul Station to the Bizplay office 12,000 won because I carried the demo equipment, no receipt images. Submit it to 김도하.**
 
-[The long one. `settlementChat` finds today's approved plan and imports
-it; for each expense the assistant sends `manual-expense`, one plain
+[The long one. `settlementChat` finds today's approved plan
+(2026-출장계획서-1738 once 김도하 has approved it) and imports it; for each expense the assistant sends `manual-expense`, one plain
 sentence, `expense-confirm`, "no image"; then `receipts-done`. If the
 agent flags an amount against the company's configured limit and asks
 whether to split the excess, the assistant asks the presenter only that.
