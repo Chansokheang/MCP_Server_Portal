@@ -76,14 +76,13 @@ document first so answers do not mix.
 ## The story
 
 Say the line in bold. The bracketed text is what to point at while the
-assistant works. Korean versions follow each prompt. Scenes 1 to 4 return
-the real content listed above.
+assistant works. Korean versions of every line are in
+`demo-story-seoul-ko-prompts.md`. Scenes 1 to 4 return the real content
+listed above.
 
 ### Scene 1. Monday. What is waiting for me?
 
 > **I am going to Bizplay in Seoul this week for the AI collaboration project. Before I go, what is waiting for me in FLOW: mentions, overdue work, and anything that changed in the last few days?**
->
-> 이번 주에 AI 협업 프로젝트 때문에 서울 비즈플레이에 가. 가기 전에 FLOW에서 나를 기다리는 게 뭐야: 멘션, 지연된 업무, 최근 며칠 사이 바뀐 것.
 
 [`flow_get_my_worklist` and `flow_find_alarms`. The answer: one mention
 from 김민수 on the settlement-API post, and the 22 Sep changes by 박지훈
@@ -96,8 +95,6 @@ into claude.ai.
 ### Scene 2. What is the state of the project?
 
 > **Summarize the Bizplay and CBNU collaboration project for the meeting: how the task board looks, and which tasks are on me.**
->
-> 회의 준비를 위해 비즈플레이 & 충북대 협업 프로젝트를 요약해줘: 업무 보드 상태, 그리고 내가 맡은 업무.
 
 [`flow_find_projects`, then `flow_collect_project_chain` and
 `flow_query_tasks`. The answer: the board with 28 items in 피드백, the four
@@ -108,8 +105,6 @@ Point at: nothing yet. Let the numbers land.
 ### Scene 3. The one thing to settle in Seoul
 
 > **Open 김민수's post about the settlement API and read the whole comment thread. What did the Bizplay side say is still missing on our side?**
->
-> 김민수님의 출장 정산서 API 게시글과 댓글을 전부 읽어줘. 비즈플레이 쪽에서 우리 쪽에 아직 빠졌다고 한 게 뭐야?
 
 [`flow_get_post` on 82494830. The answer names the gap: when evidence is
 added to a settlement, the policy amount must be looked up and the claim
@@ -122,8 +117,6 @@ read. The assistant reads discussions; it cannot post or edit in FLOW.
 ### Scene 4. What does the rulebook allow?
 
 > **Two days in Seoul in October, one night, and I am regular staff. What do we need before I go, what daily allowance and hotel amount does our rulebook allow, and what if the hotel is 95,000 won?**
->
-> 10월에 서울 1박 2일, 일반 직원이야. 가기 전에 필요한 절차, 우리 규정집의 일비와 숙박비 한도, 그리고 호텔이 95,000원이면 어떻게 되는지 알려줘.
 
 [`listBots` for the company (corpNo filled in by the gateway), then
 `askBot` on 국내출장 규정 안내 봇. The answer, with article numbers: file a
@@ -138,8 +131,6 @@ the assistant never asked "which bot?".
 ### Scene 5. File the trip plan
 
 > **File a domestic trip plan: Seoul, Bizplay head office, this Thursday and Friday, purpose "AI collaboration project review with Bizplay, October peak-season lodging". Send it to 김도하 for approval.**
->
-> 국내 출장 계획서 올려줘: 서울 비즈플레이 본사, 이번 주 목요일과 금요일, 목적은 "비즈플레이 AI 협업 프로젝트 리뷰, 10월 성수기 숙박". 결재는 김도하에게.
 
 [`planChat`, several turns the assistant holds on its own: purpose chips,
 destination, route, remaining fields, then `corporationUsers` to pick
@@ -152,8 +143,6 @@ user to click it in the web app.
 ### Scene 6. Friday evening. Settle it
 
 > **I am back. Settle the Seoul trip: KTX 오송 to 서울 round trip 37,000 won on Thursday, hotel one night 95,000 won, no receipt images. Submit it to 김도하.**
->
-> 다녀왔어. 서울 출장 정산해줘: 목요일 오송-서울 KTX 왕복 37,000원, 숙박 1박 95,000원, 영수증 이미지 없음. 김도하에게 상신해줘.
 
 [The long one. `settlementChat` imports the approved plan; for each
 expense the assistant sends `manual-expense`, one plain sentence,
@@ -169,8 +158,6 @@ enforces. Two systems, one answer.
 ### Scene 7. Tell the team
 
 > **Draft my reply to 김민수's thread: what we agreed in Seoul on the policy-amount setting, and that my trip settlement is filed. Keep it short; I will paste it in FLOW.**
->
-> 김민수님 글에 달 내 답글 초안 써줘: 서울에서 규정금액 셋팅에 대해 합의한 내용, 그리고 내 출장 정산서 제출 완료. 짧게, FLOW에 붙여넣을게.
 
 [No tool call, or one `flow_get_post` to re-read. The assistant writes the
 reply and hands it over. It cannot post: FLOW is read-only on this
@@ -182,8 +169,6 @@ Second chat, signed in as Lee Junho (`junho@bizplay.co.kr / junho1234`,
 HR group).
 
 > **Show me what Sokheang Chan is working on in FLOW.**
->
-> Sokheang Chan이 FLOW에서 뭘 하고 있는지 보여줘.
 
 [Junho has no linked Flow account. The gateway tells the assistant so,
 and the assistant tells Junho to connect his own account first. He cannot
@@ -207,7 +192,5 @@ different answer, nothing configured in claude.ai.
 After scene 6:
 
 > **Draw one chart of this trip: KTX and hotel as bars, the rulebook limits as a line, and the settlement total in the title.**
->
-> 이 출장을 차트 하나로 그려줘: KTX와 숙박을 막대로, 규정 한도를 선으로, 제목에 정산 총액.
 
 claude.ai draws it from the numbers already in the conversation.
