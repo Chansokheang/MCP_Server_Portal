@@ -135,19 +135,12 @@ the assistant never asked "which bot?".
 
 > **File a domestic trip plan for today, 30 September 2026: Seoul, Bizplay head office, from Osong by KTX and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
-[`planChat`, several turns the assistant holds on its own: the opening
-message carries the traveler, destination, date, purpose and the route in
-plain words, "from Osong by KTX and back", which the agent geocodes and
-saves. It answers "no one else travels", picks 비즈플레이 at the route
-question (the chips list only the company's registered client sites, so
-that pick just confirms the destination), names 김도하 at the
+[`planChat`, several turns the assistant holds on its own: it states the
+traveler, destination, date, route and purpose, answers "no one else
+travels", picks 비즈플레이 as the route stop, names 김도하 at the
 approval-line question and says there is no one else to add. The agent
 then reports SUBMIT_REQUESTED, and the assistant calls `createPlan` on the
 session. The reply: filed, waiting for 김도하.]
-
-Keep the route in the opening line. Said later, or "corrected" after the
-fact, it is not saved, and the form falls back to a registered client site
-as the departure point.
 
 This exact conversation was run through the gateway on 23 Sep and produced
 **2026-출장계획서-1738**, "비즈플레이 AI 협업 프로젝트 시연 서울 출장",
