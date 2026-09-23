@@ -169,7 +169,7 @@ async def test_origins_are_learned_from_real_calls_then_confirmed(admin, served)
     r = await admin.put("/api/endpoints/desk/settings", json={"values": {pid: {"askBot.botId": {"value": "bot-99"}, "askBot.nope": {"value": "x"}}, "ghost": {"a.b": {"value": 1}}}})
     assert r.json()["values"] == {pid: {"askBot.botId": {"value": "bot-99"}}}
     eff = r.json()["effective_values"]
-    assert eff == [{"backend": pid, "backend_name": "Bot", "tool": "askBot", "alias": "", "param": "botId", "kind": "value", "value": "bot-99", "enabled": True,
+    assert eff == [{"backend": pid, "backend_name": "Bot", "tool": "askBot", "alias": "", "tools_taking": 1, "param": "botId", "kind": "value", "value": "bot-99", "enabled": True,
                     "inherited": True, "backend_value": "bot-77", "backend_kind": "default", "backend_enabled": True, "changed": True}]
     async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
         ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
@@ -181,6 +181,15 @@ async def test_origins_are_learned_from_real_calls_then_confirmed(admin, served)
         ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
         assert "botId" in ask["properties"] and "default" not in ask["properties"]["botId"]
         await c.call_tool("bot_askBot", {"query": "g", "botId": "bot-78"}); assert CALLS[-1][1]["botId"] == "bot-78"
+    # One value for every tool that takes the parameter (an API token header, say); a row for one tool wins.
+    r = await admin.put("/api/endpoints/desk/settings", json={"values": {pid: {"*.botId": {"value": "B-ALL"}, "*.query": {"value": "Q-ALL"}, "askBot.botId": {"value": "B-ONE"}, "*.nothing": {"value": "x"}}}})
+    assert set(r.json()["values"][pid]) == {"*.botId", "*.query", "askBot.botId"}
+    every = next(v for v in r.json()["effective_values"] if v["tool"] == "*" and v["param"] == "query")
+    assert every["tools_taking"] == 1
+    async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:
+        ask = {t.name: t for t in await c.list_tools()}["bot_askBot"].input_schema
+        assert "query" not in ask["properties"] and "botId" not in ask["properties"]
+        await c.call_tool("bot_askBot", {}); assert CALLS[-1][1]["botId"] == "B-ONE" and CALLS[-1][1]["query"] == "Q-ALL"
     # Back to inheriting: the backend's default is in force again.
     await admin.put("/api/endpoints/desk/settings", json={"values": {}})
     async with Client(StreamableHttpTransport(f"{served}/mcp/desk", auth=tok)) as c:

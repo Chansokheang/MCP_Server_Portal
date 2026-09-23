@@ -239,7 +239,8 @@ def parse_gateway_values(value: Any, state: dict) -> dict[str, dict[str, dict]]:
 
     A row may replace the backend's value, change its kind, or only switch it off
     ({"enabled": false}); a row for a parameter the backend has no value for adds one
-    for this gateway alone.
+    for this gateway alone. The tool may be "*": every tool that takes the parameter,
+    which is how a header such as an API token is set once.
     """
     out: dict[str, dict[str, dict]] = {}
     for pid, rows in (value or {}).items() if isinstance(value, dict) else []:
@@ -250,9 +251,13 @@ def parse_gateway_values(value: Any, state: dict) -> dict[str, dict[str, dict]]:
             if not isinstance(spec, dict):
                 continue
             tool, _, param = str(key).partition(".")
-            row = provider.get("tools", {}).get(tool)
-            if not row or not param or (row.get("params") and param not in row["params"]):
-                continue
+            if tool == "*":
+                if not param or not any(param in (r.get("params") or []) for r in provider.get("tools", {}).values()):
+                    continue
+            else:
+                row = provider.get("tools", {}).get(tool)
+                if not row or not param or (row.get("params") and param not in row["params"]):
+                    continue
             entry: dict = {}
             if spec.get("value") not in (None, ""):
                 entry["value"] = _coerce(spec["value"])
@@ -285,14 +290,22 @@ def typed_rows(provider: dict, state: dict | None = None, key: str = "") -> dict
 def typed_for(provider: dict, tool: str, state: dict | None = None, key: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
     """({param: fixed value}, {param: default}) in force for one tool on one endpoint. Switched-off rows are left out."""
     fixed, defaults = {}, {}
-    for k, spec in typed_rows(provider, state, key).items():
+    takes = set((provider.get("tools", {}).get(tool) or {}).get("params") or [])
+    rows = typed_rows(provider, state, key)
+    for k, spec in sorted(rows.items(), key=lambda kv: kv[0].startswith("*.")):  # a row for this one tool wins over "every tool"
         t, _, param = k.partition(".")
-        if t != tool or spec.get("enabled") is False:
+        if t == "*":
+            if param not in takes or f"{tool}.{param}" in rows:
+                continue
+        elif t != tool:
+            continue
+        if spec.get("enabled") is False:
+            fixed.pop(param, None); defaults.pop(param, None)
             continue
         if "value" in spec:
-            fixed[param] = spec["value"]
+            fixed[param] = spec["value"]; defaults.pop(param, None)
         elif "default" in spec:
-            defaults[param] = spec["default"]
+            defaults[param] = spec["default"]; fixed.pop(param, None)
     return fixed, defaults
 
 
@@ -317,6 +330,7 @@ def effective_values(state: dict, key: str) -> list[dict]:
             tool, _, param = k.partition(".")
             inherited = base.get(k)
             out.append({"backend": p["id"], "backend_name": p["name"], "tool": tool, "alias": (p["tools"].get(tool) or {}).get("alias") or "",
+                        "tools_taking": sum(1 for r in p["tools"].values() if r.get("enabled") and param in (r.get("params") or [])) if tool == "*" else 1,
                         "param": param, "kind": "value" if "value" in spec else "default", "value": spec.get("value", spec.get("default")),
                         "enabled": spec.get("enabled") is not False, "inherited": inherited is not None,
                         "backend_value": None if inherited is None else inherited.get("value", inherited.get("default")),

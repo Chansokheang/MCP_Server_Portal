@@ -929,7 +929,7 @@ function gatewayValuesSection(es, told) {
   const kindSelect = (sel) => `<select data-k="kind" aria-label="Kind" style="min-width:150px"><option value="value" ${sel === "value" ? "selected" : ""}>fixed (hidden)</option><option value="default" ${sel === "default" ? "selected" : ""}>default (may change)</option></select>`;
   const show = (v) => v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
   const row = (r) => `<tr data-gv="${esc(r.backend)}|${esc(r.tool)}.${esc(r.param)}" data-inherited="${r.inherited ? 1 : 0}" data-bkind="${esc(r.backend_kind || "")}" data-bvalue="${esc(show(r.backend_value))}">
-      <td>${esc(r.backend_name)}</td><td class="mono">${esc(r.alias || r.tool)}<span class="muted">.</span>${esc(r.param)}</td>
+      <td>${esc(r.backend_name)}</td><td class="mono">${r.tool === "*" ? `<span class="muted">every tool (${r.tools_taking})</span>` : esc(r.alias || r.tool)}<span class="muted">.</span>${esc(r.param)}</td>
       <td>${kindSelect(r.kind)}</td>
       <td><input data-k="value" class="mono" value="${esc(r.changed && r.value != null ? show(r.value) : "")}" placeholder="${r.inherited ? esc(show(r.backend_value)) : "the value"}" style="min-width:120px"></td>
       <td><input type="checkbox" class="switch" data-k="on" ${r.enabled ? "checked" : ""} aria-label="On"></td>
@@ -937,7 +937,7 @@ function gatewayValuesSection(es, told) {
   return `<div id="gvalues">
       <div class="section-head"><h2 class="section-title">Values for this gateway</h2>${rows.length ? chip("lilac", `${rows.filter((r) => r.enabled).length} of ${rows.length} in use`, "sliders-horizontal") : ""}</div>
       <div class="card settings-list">
-        <div class="setting stacked"><div class="setting-text"><strong>Fixed values and defaults</strong><p class="muted small">A value that belongs to the people who use this gateway: their project, their team's usual choice. A fixed value is sent on every call and hidden from the model; a default is shown to the model and used only when it leaves the parameter out. Pick the backend, the tool and the parameter, type the value, and switch it off whenever it should not apply.</p></div>
+        <div class="setting stacked"><div class="setting-text"><strong>Fixed values and defaults</strong><p class="muted small">A value that belongs to the people who use this gateway: their project, their team's usual choice. A fixed value is sent on every call and hidden from the model; a default is shown to the model and used only when it leaves the parameter out. Pick the backend, the tool and the parameter, type the value, and switch it off whenever it should not apply. Choose "every tool that takes it" for something like an API token header, so it is set once. A row for one tool wins over an every-tool row.</p></div>
           <div class="setting-ctl"><div class="table-wrap"><table id="gv-table">
             <tr><th>Backend</th><th>Parameter</th><th>Kind</th><th>Value here</th><th>On</th><th></th></tr>
             ${rows.map(row).join("")}
@@ -954,8 +954,13 @@ function bindGatewayValues(es, told, settingsKey) {
   if (!$("#gv-save")) return;
   const backends = told.backends || [];
   const nb = $("#gv-new [data-k=new-backend]"), nt = $("#gv-new [data-k=new-tool]"), np = $("#gv-new [data-k=new-param]");
-  nb.onchange = () => { const b = backends.find((x) => x.id === nb.value); nt.innerHTML = `<option value="">tool…</option>` + (b?.tools || []).filter((t) => t.enabled && (t.params || []).length).map((t) => `<option value="${esc(t.name)}">${esc(t.alias || t.name)}</option>`).join(""); np.innerHTML = `<option value="">parameter…</option>`; };
-  nt.onchange = () => { const b = backends.find((x) => x.id === nb.value); const t = (b?.tools || []).find((x) => x.name === nt.value); np.innerHTML = `<option value="">parameter…</option>` + (t?.params || []).map((q) => `<option value="${esc(q)}">${esc(q)}</option>`).join(""); };
+  const taking = (b) => (b?.tools || []).filter((t) => t.enabled && (t.params || []).length);
+  nb.onchange = () => { const b = backends.find((x) => x.id === nb.value); nt.innerHTML = `<option value="">tool…</option><option value="*">every tool that takes it</option>` + taking(b).map((t) => `<option value="${esc(t.name)}">${esc(t.alias || t.name)}</option>`).join(""); np.innerHTML = `<option value="">parameter…</option>`; };
+  nt.onchange = () => {
+    const b = backends.find((x) => x.id === nb.value);
+    const params = nt.value === "*" ? [...new Set(taking(b).flatMap((t) => t.params || []))].sort() : ((b?.tools || []).find((x) => x.name === nt.value)?.params || []);
+    np.innerHTML = `<option value="">parameter…</option>` + params.map((q) => `<option value="${esc(q)}">${esc(q)}</option>`).join("");
+  };
   $("#page").querySelectorAll("#gv-table [data-gv-remove]").forEach((b) => b.onclick = () => b.closest("tr").remove());
   $("#page").querySelectorAll("#gv-table [data-gv-reset]").forEach((b) => b.onclick = () => { const tr = b.closest("tr"); tr.querySelector("[data-k=value]").value = ""; tr.querySelector("[data-k=kind]").value = tr.dataset.bkind; tr.querySelector("[data-k=on]").checked = true; tr.dataset.reset = "1"; b.remove(); });
   $("#gv-save").onclick = async () => {
