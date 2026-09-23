@@ -157,13 +157,19 @@ user to click it in the web app.
 
 > **The trip is done. Settle today's Seoul trip: KTX Osong to Seoul round trip 37,000 won, taxi from Seoul Station to the Bizplay office 12,000 won because I carried the demo equipment, no receipt images. Submit it to 김도하.**
 
-[The long one. `settlementChat` finds today's approved plan
-(2026-출장계획서-1738 once 김도하 has approved it) and imports it; for each expense the assistant sends `manual-expense`, one plain
-sentence, `expense-confirm`, "no image"; then `receipts-done`. If the
-agent flags an amount against the company's configured limit and asks
-whether to split the excess, the assistant asks the presenter only that.
-Then SUBMIT, the approver by name, `CREATE_SETTLEMENT`, document number.
+[The long one. `settlementChat` with the period; the assistant picks
+today's plan from the list (2026-출장계획서-1738 once 김도하 has approved
+it), picks 교통비, then 기타증빙, then 직접 경비 입력; describes the KTX
+fare in one sentence with both dates, confirms the preview, says "No
+image, register it without one"; repeats for the taxi; sends
+receipts-done, then submit, confirms 김도하 as the approver and says there
+is no one else. The agent files it and returns the document number.
 Total 49,000원 plus the automatic 40,000원 daily allowance.]
+
+This sequence was run through the gateway on 24 Sep with Kim Minji's
+agent token, against an approved October plan, and produced
+**2026-출장정산서-1739** (₩37,000, one KTX receipt, approver 김도하,
+waiting for approval). Every call is in the Audit Log under emp001.
 
 Point at: the Audit Log, a dozen calls in a row, one person, one company.
 Then back to scene 4: the taxi rule the bot quoted is the reason written
