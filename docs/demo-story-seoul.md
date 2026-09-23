@@ -160,17 +160,20 @@ user to click it in the web app.
 [The long one. `settlementChat` with the period; the assistant picks
 today's plan from the list (2026-출장계획서-1738 once 김도하 has approved
 it), picks 교통비, then 기타증빙, then 직접 경비 입력; describes the KTX
-fare in one sentence, confirms the preview, says "No
-image, register it without one"; repeats for the taxi; sends
-receipts-done, then submit, confirms 김도하 as the approver and says there
-is no one else. The agent files it and returns the document number.
-Total 30,500원 plus the automatic 40,000원 daily allowance. The one-way
-fare sits under the 30,000원 per day KTX policy, so no split question.]
+fare in one sentence, confirms the preview, says "No image, register it
+without one". The taxi goes in as 기타비용, not 교통비: this company has
+policy amounts only for KTX, SRT, air and lodging, so a taxi under 교통비
+gets a policy of 0 and BizPlay refuses to file it. Then receipts-done,
+submit, confirm 김도하 as the approver and say there is no one else. The
+agent files it and returns the document number. Total 30,500원 plus the
+automatic 40,000원 daily allowance.]
 
-This sequence was run through the gateway on 24 Sep with Kim Minji's
-agent token, against an approved October plan, and produced
-**2026-출장정산서-1739** (₩37,000, one KTX receipt, approver 김도하,
-waiting for approval). Every call is in the Audit Log under emp001.
+This exact sequence was run on 24 Sep through the AskDocs connection as
+the AI client, with a token, against the approved plan 1745, and produced
+**2026-출장정산서-1746** (KTX 18,500 under the 30,000 policy, taxi 12,000
+at actual cost, approver 김도하, waiting for approval). The TravelExpense
+notes and the settlementChat description carry the taxi rule, so the
+assistant does not need to be told.
 
 Point at: the Audit Log, a dozen calls in a row, one person, one company.
 Then back to scene 4: the taxi rule the bot quoted is the reason written
