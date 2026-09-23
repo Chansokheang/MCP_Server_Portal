@@ -31,7 +31,7 @@ that work. The assistant is claude.ai, connected to one gateway URL.
 | What | Detail |
 |---|---|
 | Bot | 국내출장 규정 안내 봇, id `430ba21f-866d-411d-9ef2-71f7cc971549`, company `1078836129` (the demo corp, so `listBots` finds it) |
-| Document | DemoCorp01 국내출장 규정 (2026-09 개정), the text in `docs/demo-rulebook-democorp01.md`, uploaded and embedded |
+| Documents | Two versions of the same rulebook, both uploaded and embedded: Korean, `docs/demo-rulebook-democorp01.md`, and English, `docs/demo-rulebook-democorp01-en.md`. The bot answers in the language of the question and cites the matching file. |
 | Starter questions | 출장 가기 전에 무엇을 먼저 해야 하나요? · 서울 1박 출장의 일비와 숙박비 한도는 얼마인가요? · 영수증이 없으면 어떻게 하나요? |
 | What it answers, verified through the gateway | 일비 40,000원/day (임원 60,000). Lodging 80,000원 per night fixed, excess is the employee's own; Seoul in Oct to Nov up to 100,000원 with a reason on the plan. KTX 일반실 only, 특실 for executives; 오송 to 서울 standard fare 18,500원. No receipt: 기타증빙 with a reason, 80% of the fixed amount. Trip plan first, approver for 테스트1팀 is 인사1팀 팀장 김도하 상무. It cites the article numbers. |
 
