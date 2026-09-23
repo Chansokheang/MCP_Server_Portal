@@ -8,8 +8,11 @@ be filed, so they follow the story freely.
 The setting is real: the FLOW project **비즈플레이 & 충북대 AI 협업 관련**
 (Bizplay and Chungbuk National University), where the Bizplay team and the
 lab are building the very travel agents this demo runs on. The presenter
-plays the lab researcher who travels to Bizplay's Seoul office to review
-that work. The assistant is claude.ai, connected to one gateway URL.
+is the lab researcher who travels to Bizplay's Seoul office on
+**Wednesday 30 September 2026** to show this gateway. The trip in the
+story is that trip: the plan is filed for the 30th, and the settlement is
+filed the same day, on stage. The assistant is claude.ai, connected to one
+gateway URL.
 
 ## What is really there
 
@@ -80,9 +83,9 @@ assistant works. Korean versions of every line are in
 `demo-story-seoul-ko-prompts.md`. Scenes 1 to 4 return the real content
 listed above.
 
-### Scene 1. Monday. What is waiting for me?
+### Scene 1. Monday 28 September. What is waiting for me?
 
-> **I am going to Bizplay in Seoul this week for the AI collaboration project. Before I go, what is waiting for me in FLOW: mentions, overdue work, and anything that changed in the last few days?**
+> **I am going to Bizplay in Seoul on Wednesday to present the MCP gateway for the AI collaboration project. Before I go, what is waiting for me in FLOW: mentions, overdue work, and anything that changed in the last few days?**
 
 [`flow_get_my_worklist` and `flow_find_alarms`. The answer: one mention
 from 김민수 on the settlement-API post, and the 22 Sep changes by 박지훈
@@ -116,48 +119,51 @@ read. The assistant reads discussions; it cannot post or edit in FLOW.
 
 ### Scene 4. What does the rulebook allow?
 
-> **Two days in Seoul in October, one night, and I am regular staff. What do we need before I go, what daily allowance and hotel amount does our rulebook allow, and what if the hotel is 95,000 won?**
+> **On 30 September I go to Bizplay in Seoul for one day, from Osong by KTX, carrying the demo equipment. I am regular staff. What must I do before I go, what is my daily allowance, which KTX class may I take, and may I take a taxi from Seoul Station to the office?**
 
 [`listBots` for the company (corpNo filled in by the gateway), then
 `askBot` on 국내출장 규정 안내 봇. The answer, with article numbers: file a
-trip plan first, approver 김도하; 40,000원 per day; 80,000원 per night
-fixed, and for Seoul in October up to 100,000원 if the reason is on the
-plan, so 95,000원 is fine once the plan says so.]
+trip plan first, approver 김도하; 40,000원 for a full day; KTX standard
+class, 18,500원 one way Osong to Seoul; a taxi is accepted with a reason,
+and carrying equipment is one.]
 
 Point at: the BZP_Chatbot page, "Which tool produces which id". `askBot`
 needs a botId that `listBots` returns in field `id`. That one line is why
 the assistant never asked "which bot?".
 
-### Scene 5. File the trip plan
+### Scene 5. File the trip plan for today
 
-> **File a domestic trip plan: Seoul, Bizplay head office, this Thursday and Friday, purpose "AI collaboration project review with Bizplay, October peak-season lodging". Send it to 김도하 for approval.**
+> **File a domestic trip plan for today, 30 September 2026: Seoul, Bizplay head office, from Osong by KTX and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
 [`planChat`, several turns the assistant holds on its own: purpose chips,
 destination, route, remaining fields, then `corporationUsers` to pick
-김도하 by name, then `createPlan`. The reply carries the document number.]
+김도하 by name, then `createPlan`. The reply carries the document number.
+If the audience includes 김도하, this is the moment to approve it on a
+phone.]
 
 Point at: the TravelExpense usage notes, the line "Answer them yourself".
 Before those notes the assistant stopped at the first chip and told the
 user to click it in the web app.
 
-### Scene 6. Friday evening. Settle it
+### Scene 6. Same day, end of the showcase. Settle it
 
-> **I am back. Settle the Seoul trip: KTX 오송 to 서울 round trip 37,000 won on Thursday, hotel one night 95,000 won, no receipt images. Submit it to 김도하.**
+> **The trip is done. Settle today's Seoul trip: KTX Osong to Seoul round trip 37,000 won, taxi from Seoul Station to the Bizplay office 12,000 won because I carried the demo equipment, no receipt images. Submit it to 김도하.**
 
-[The long one. `settlementChat` imports the approved plan; for each
-expense the assistant sends `manual-expense`, one plain sentence,
-`expense-confirm`, "no image"; then `receipts-done`. If the agent flags an
-amount against the company's configured limit and asks whether to split
-the excess, the assistant asks the presenter only that. Then SUBMIT, the
-approver by name, `CREATE_SETTLEMENT`, document number.]
+[The long one. `settlementChat` finds today's approved plan and imports
+it; for each expense the assistant sends `manual-expense`, one plain
+sentence, `expense-confirm`, "no image"; then `receipts-done`. If the
+agent flags an amount against the company's configured limit and asks
+whether to split the excess, the assistant asks the presenter only that.
+Then SUBMIT, the approver by name, `CREATE_SETTLEMENT`, document number.
+Total 49,000원 plus the automatic 40,000원 daily allowance.]
 
 Point at: the Audit Log, a dozen calls in a row, one person, one company.
-Then back to scene 4: the rule the bot quoted is the rule the settlement
-enforces. Two systems, one answer.
+Then back to scene 4: the taxi rule the bot quoted is the reason written
+on the expense. Two systems, one answer.
 
 ### Scene 7. Tell the team
 
-> **Draft my reply to 김민수's thread: what we agreed in Seoul on the policy-amount setting, and that my trip settlement is filed. Keep it short; I will paste it in FLOW.**
+> **Draft my reply to 김민수's thread: what we agreed today in Seoul on the policy-amount setting, and that today's trip is already settled through the gateway. Keep it short; I will paste it in FLOW.**
 
 [No tool call, or one `flow_get_post` to re-read. The assistant writes the
 reply and hands it over. It cannot post: FLOW is read-only on this
@@ -191,6 +197,6 @@ different answer, nothing configured in claude.ai.
 
 After scene 6:
 
-> **Draw one chart of this trip: KTX and hotel as bars, the rulebook limits as a line, and the settlement total in the title.**
+> **Draw one chart of today's trip: KTX, taxi and the daily allowance as bars, the rulebook standard fare as a line, and the settlement total in the title.**
 
 claude.ai draws it from the numbers already in the conversation.

@@ -2,9 +2,9 @@
 
 Same scenes as demo-story-seoul.md, the line to say in Korean.
 
-**Scene 1. Monday. What is waiting for me?**
+**Scene 1. Monday 28 September. What is waiting for me?**
 
-> 이번 주에 AI 협업 프로젝트 때문에 서울 비즈플레이에 가. 가기 전에 FLOW에서 나를 기다리는 게 뭐야: 멘션, 지연된 업무, 최근 며칠 사이 바뀐 것.
+> 수요일에 AI 협업 프로젝트의 MCP 게이트웨이를 발표하러 서울 비즈플레이에 가. 가기 전에 FLOW에서 나를 기다리는 게 뭐야: 멘션, 지연된 업무, 최근 며칠 사이 바뀐 것.
 
 **Scene 2. What is the state of the project?**
 
@@ -16,24 +16,24 @@ Same scenes as demo-story-seoul.md, the line to say in Korean.
 
 **Scene 4. What does the rulebook allow?**
 
-> 10월에 서울 1박 2일, 일반 직원이야. 가기 전에 필요한 절차, 우리 규정집의 일비와 숙박비 한도, 그리고 호텔이 95,000원이면 어떻게 되는지 알려줘.
+> 9월 30일에 오송에서 KTX로 서울 비즈플레이에 당일 출장을 가고, 시연 장비를 들고 가. 일반 직원이야. 가기 전에 뭘 해야 하고, 일비는 얼마고, KTX 좌석은 어떤 등급이고, 서울역에서 사무실까지 택시를 타도 돼?
 
-**Scene 5. File the trip plan**
+**Scene 5. File the trip plan for today**
 
-> 국내 출장 계획서 올려줘: 서울 비즈플레이 본사, 이번 주 목요일과 금요일, 목적은 "비즈플레이 AI 협업 프로젝트 리뷰, 10월 성수기 숙박". 결재는 김도하에게.
+> 오늘 2026년 9월 30일 국내 출장 계획서 올려줘: 서울 비즈플레이 본사, 오송에서 KTX로 당일 왕복, 목적은 "비즈플레이 AI 협업 프로젝트 MCP 게이트웨이 시연". 결재는 김도하에게.
 
-**Scene 6. Friday evening. Settle it**
+**Scene 6. Same day, end of the showcase. Settle it**
 
-> 다녀왔어. 서울 출장 정산해줘: 목요일 오송-서울 KTX 왕복 37,000원, 숙박 1박 95,000원, 영수증 이미지 없음. 김도하에게 상신해줘.
+> 출장 끝났어. 오늘 서울 출장 정산해줘: 오송-서울 KTX 왕복 37,000원, 시연 장비 때문에 서울역에서 비즈플레이 사무실까지 택시 12,000원, 영수증 이미지 없음. 김도하에게 상신해줘.
 
 **Scene 7. Tell the team**
 
-> 김민수님 글에 달 내 답글 초안 써줘: 서울에서 규정금액 셋팅에 대해 합의한 내용, 그리고 내 출장 정산서 제출 완료. 짧게, FLOW에 붙여넣을게.
+> 김민수님 글에 달 내 답글 초안 써줘: 오늘 서울에서 규정금액 셋팅에 대해 합의한 내용, 그리고 오늘 출장은 게이트웨이로 이미 정산했다는 것. 짧게, FLOW에 붙여넣을게.
 
 **Scene 8. The one that is refused**
 
 > Sokheang Chan이 FLOW에서 뭘 하고 있는지 보여줘.
 
-**Scene 8. The one that is refused**
+**A closing visual (optional)**
 
-> 이 출장을 차트 하나로 그려줘: KTX와 숙박을 막대로, 규정 한도를 선으로, 제목에 정산 총액.
+> 오늘 출장을 차트 하나로 그려줘: KTX, 택시, 일비를 막대로, 규정 기준 요금을 선으로, 제목에 정산 총액.
