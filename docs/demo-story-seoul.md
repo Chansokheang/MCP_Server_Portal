@@ -133,7 +133,7 @@ the assistant never asked "which bot?".
 
 ### Scene 5. File the trip plan for today
 
-> **File a domestic trip plan for today, 30 September 2026: Seoul, Bizplay head office, from Osong by KTX and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
+> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, from Osong by KTX and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
 [`planChat`, several turns the assistant holds on its own: it states the
 traveler, destination, date, route and purpose, answers "no one else
@@ -155,16 +155,17 @@ user to click it in the web app.
 
 ### Scene 6. Same day, end of the showcase. Settle it
 
-> **The trip is done. Settle today's Seoul trip: KTX Osong to Seoul round trip 37,000 won, taxi from Seoul Station to the Bizplay office 12,000 won because I carried the demo equipment, no receipt images. Submit it to 김도하.**
+> **The trip is done. Settle today's Seoul trip: KTX Osong to Seoul one way 18,500 won, taxi from Seoul Station to the Bizplay office 12,000 won because I carried the demo equipment, no receipt images. Submit it to 김도하.**
 
 [The long one. `settlementChat` with the period; the assistant picks
 today's plan from the list (2026-출장계획서-1738 once 김도하 has approved
 it), picks 교통비, then 기타증빙, then 직접 경비 입력; describes the KTX
-fare in one sentence with both dates, confirms the preview, says "No
+fare in one sentence, confirms the preview, says "No
 image, register it without one"; repeats for the taxi; sends
 receipts-done, then submit, confirms 김도하 as the approver and says there
 is no one else. The agent files it and returns the document number.
-Total 49,000원 plus the automatic 40,000원 daily allowance.]
+Total 30,500원 plus the automatic 40,000원 daily allowance. The one-way
+fare sits under the 30,000원 per day KTX policy, so no split question.]
 
 This sequence was run through the gateway on 24 Sep with Kim Minji's
 agent token, against an approved October plan, and produced

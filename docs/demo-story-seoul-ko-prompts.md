@@ -24,7 +24,7 @@ Same scenes as demo-story-seoul.md, the line to say in Korean.
 
 **Scene 6. Same day, end of the showcase. Settle it**
 
-> 출장 끝났어. 오늘 서울 출장 정산해줘: 오송-서울 KTX 왕복 37,000원, 시연 장비 때문에 서울역에서 비즈플레이 사무실까지 택시 12,000원, 영수증 이미지 없음. 김도하에게 상신해줘.
+> 출장 끝났어. 오늘 서울 출장 정산해줘: 오송-서울 KTX 편도 18,500원, 시연 장비 때문에 서울역에서 비즈플레이 사무실까지 택시 12,000원, 영수증 이미지 없음. 김도하에게 상신해줘.
 
 **Scene 7. Tell the team**
 
