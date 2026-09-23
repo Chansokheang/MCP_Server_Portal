@@ -279,10 +279,8 @@ function refreshPage() {
   if (session && pages[page] && $("#modal").classList.contains("hidden")) pages[page]().catch(() => {});
 }
 $("#refresh").addEventListener("click", () => { refreshPage(); toast("Reloaded"); });
-// Coming back to the tab shows current data, so registering an API elsewhere
-// (or from a script) does not leave a stale page behind.
-window.addEventListener("focus", refreshPage);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPage(); });
+// The page is reloaded only by the Refresh button or by navigating: a reload on
+// tab focus threw away half-typed settings whenever someone glanced elsewhere.
 
 // Tab strip: [{key, label, icon, count}], plus optional note {title, sub}.
 function renderTabs(items, active, onPick, note) {
@@ -1657,9 +1655,9 @@ pages.gateway = async () => {
           <div class="setting-ctl"><input id="es-groups" class="ctl-wide" value="${esc(es.access.groups.join(", "))}" placeholder="finance, hr"></div></div>
         <div class="setting ${es.access.mode === "companies" ? "" : "hidden"}" id="es-companies-row"><div class="setting-text"><strong>Companies</strong><p class="muted small">Comma separated company ids from the caller's token.</p></div>
           <div class="setting-ctl"><input id="es-companies" class="ctl-wide" value="${esc(es.access.companies.join(", "))}" placeholder="1234567890"></div></div>
-        <div class="setting stacked"><div class="setting-text"><strong>Instructions for the model</strong><p class="muted small">The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are sent after your text; they are shown below and edited on the backend's page.</p></div>
+        <div class="setting stacked"><div class="setting-text"><strong>Instructions for the model</strong><p class="muted small">The opening lines a model reads when it connects here: who it is helping and how the backends fit together. Each backend's own usage notes are sent after your text; edit them on the backend's page.</p></div>
           <div class="setting-ctl"><textarea id="es-instructions" rows="3" style="width:100%;min-height:72px" placeholder="You are the assistant for this team. Say which backend to use for which kind of question.">${esc(es.instructions || "")}</textarea>
-            ${(told.backends || []).length ? `<div class="told-list">${told.backends.map((b) => `<div class="told-item"><div class="small"><a href="#provider?p=${esc(b.id)}">${esc(b.name)}</a>${b.has_notes ? "" : `: <strong>no usage notes</strong> <span class="muted">so the model has only tool names and descriptions to go on; add them on its page.</span>`}${Object.keys(b.bound || {}).length ? `<span class="muted"> · fills in ${esc(Object.keys(b.bound).join(", "))} from the caller</span>` : ""}</div>${b.has_notes ? `<pre class="told">${esc(b.notes)}</pre>` : ""}</div>`).join("")}</div>` : ""}</div></div>
+            ${(told.backends || []).length ? `<div class="told-list">${told.backends.map((b) => `<div class="told-item"><a href="#provider?p=${esc(b.id)}">${esc(b.name)}</a>${b.has_notes ? chip("green", "usage notes follow", "check") : chip("amber", "no usage notes", "warning")}${Object.keys(b.bound || {}).length ? `<span class="muted small">fills in ${esc(Object.keys(b.bound).join(", "))} from the caller</span>` : ""}</div>`).join("")}</div>` : ""}</div></div>
         <div class="setting"><div class="setting-text"><p class="muted small" style="margin:0">Token lifetime, the public address and upstream credentials stay on the Security page; they are not per gateway.</p></div>
           <div class="setting-ctl"><button class="btn solid small" id="es-save"><i class="ph ph-check"></i> Save gateway settings</button></div></div>
       </div>
