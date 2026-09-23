@@ -147,3 +147,14 @@ async def test_two_backends_one_gateway_guided_end_to_end(admin, served):
         tools = {t.name: t for t in await c.list_tools()}
         assert "chatbot_list_2" in tools and "corpNo" not in tools["chatbot_list_2"].input_schema["properties"]
         assert "employeeId" in tools["chatbot_askBot"].input_schema["properties"], "the explicit binding was removed"
+
+
+async def test_usage_notes_over_the_limit_are_refused_not_cut(admin, served):
+    from bizplay_mcp import guidance
+    pid = (await admin.get("/api/registry")).json()["items"][0]["id"]
+    r = await admin.patch(f"/api/registry/{pid}", json={"instructions": "x" * (guidance.MAX_INSTRUCTIONS + 1)})
+    assert r.status_code == 400 and "limited to" in r.json()["error"]
+    r = await admin.patch(f"/api/registry/{pid}", json={"instructions": "y" * guidance.MAX_INSTRUCTIONS})
+    assert r.status_code == 200 and len(r.json()["instructions"]) == guidance.MAX_INSTRUCTIONS
+    r = await admin.put("/api/endpoints/_shared/settings", json={"instructions": "z" * (guidance.MAX_INSTRUCTIONS + 1)})
+    assert r.status_code == 400

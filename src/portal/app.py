@@ -665,7 +665,10 @@ async def update_provider(request: Request):
     if "access" in body and isinstance(body["access"], dict):
         p["access"] = _access_config(body["access"])
     if "instructions" in body:
-        p["instructions"] = guidance.clean_instructions(body["instructions"])
+        try:
+            p["instructions"] = guidance.check_instructions(body["instructions"])
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
     if "param_sources" in body:
         p["param_sources"] = guidance.parse_sources(body["param_sources"])
         p.pop("bound_params", None)
@@ -1183,7 +1186,10 @@ async def put_endpoint_settings(request: Request):
     if "access" in body and isinstance(body["access"], dict):
         own["access"] = _access_config(body["access"])
     if "instructions" in body:
-        own["instructions"] = guidance.clean_instructions(body["instructions"])
+        try:
+            own["instructions"] = guidance.check_instructions(body["instructions"])
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from None
     if "param_sources" in body and isinstance(body["param_sources"], dict):
         # {backend id: {param: {kind, value} | null}}; null clears the backend's own source for this gateway.
         overrides: dict[str, dict] = {}

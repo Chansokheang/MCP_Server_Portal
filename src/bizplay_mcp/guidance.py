@@ -42,7 +42,7 @@ CALLER_SOURCES = {
 }
 KINDS = ("caller", "fixed", "default")
 ALIAS_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,50}$")
-MAX_INSTRUCTIONS = 2000
+MAX_INSTRUCTIONS = 8000
 _USER_HINT = re.compile(r"^(user_?id|employee_?(id|no|number)|emp_?(id|no)|member_?id|corp_?user_?id)$", re.I)
 
 
@@ -57,6 +57,14 @@ def suggested_source(param: str) -> str | None:
 
 def clean_instructions(text: Any) -> str:
     return "\n".join(line.rstrip() for line in str(text or "").strip().splitlines())[:MAX_INSTRUCTIONS]
+
+
+def check_instructions(text: Any) -> str:
+    """Notes as they will be stored, or a ValueError naming the limit: notes are never cut silently."""
+    cleaned = "\n".join(line.rstrip() for line in str(text or "").strip().splitlines())
+    if len(cleaned) > MAX_INSTRUCTIONS:
+        raise ValueError(f"usage notes are limited to {MAX_INSTRUCTIONS} characters; this text has {len(cleaned)}")
+    return cleaned
 
 
 def _coerce(value: Any) -> Any:
