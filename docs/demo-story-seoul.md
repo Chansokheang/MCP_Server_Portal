@@ -119,13 +119,13 @@ read. The assistant reads discussions; it cannot post or edit in FLOW.
 
 ### Scene 4. What does the rulebook allow?
 
-> **On 30 September I go to Bizplay in Seoul for one day, from Osong by KTX, carrying the demo equipment. I am regular staff. What must I do before I go, what is my daily allowance, which KTX class may I take, and may I take a taxi from Seoul Station to the office?**
+> **On 30 September I go to Bizplay in Seoul for one day, by express bus from Cheongju Intercity Bus Terminal to Seoul Express Bus Terminal, carrying the demo equipment. I am regular staff. What must I do before I go, what is my daily allowance, which bus class may I take, and may I take a taxi from the terminal to the office?**
 
 [`listBots` for the company (corpNo filled in by the gateway), then
 `askBot` on 국내출장 규정 안내 봇. The answer, with article numbers: file a
-trip plan first, approver 김도하; 40,000원 for a full day; KTX standard
-class, 18,500원 one way Osong to Seoul; a taxi is accepted with a reason,
-and carrying equipment is one.]
+trip plan first, approver 김도하; 40,000원 for a full day; express and
+intercity buses at actual cost, premium classes only with a reason; a taxi
+is accepted with a reason, and carrying equipment is one.]
 
 Point at: the BZP_Chatbot page, "Which tool produces which id". `askBot`
 needs a botId that `listBots` returns in field `id`. That one line is why
@@ -133,7 +133,7 @@ the assistant never asked "which bot?".
 
 ### Scene 5. File the trip plan for today
 
-> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, from Osong by KTX and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
+> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, by express bus from Cheongju Intercity Bus Terminal to Seoul Express Bus Terminal and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
 [`planChat`, several turns the assistant holds on its own: it states the
 traveler, destination, date, route and purpose, answers "no one else
@@ -142,12 +142,13 @@ approval-line question and says there is no one else to add. The agent
 then reports SUBMIT_REQUESTED, and the assistant calls `createPlan` on the
 session. The reply: filed, waiting for 김도하.]
 
-This exact conversation was run through the gateway on 23 Sep and produced
-**2026-출장계획서-1738**, "비즈플레이 AI 협업 프로젝트 시연 서울 출장",
-30 Sep, Osong to Seoul by train and back, approver 김도하, status
-DRAFTED. Either have 김도하 approve that one before the day and skip to
-scene 6, or file a second one live; both work. If 김도하 is in the room,
-the live filing is the moment to approve it on a phone.
+The same conversation, with the KTX route, was run through the gateway
+on 23 Sep and produced **2026-출장계획서-1738** for 30 Sep, approver
+김도하, status DRAFTED. That plan says train from Osong; with the bus
+route in the story, file a fresh plan live (the route is geocoded from the
+opening line) or have 김도하 approve 1738 and accept that its route says
+train. If 김도하 is in the room, the live filing is the moment to approve
+it on a phone.
 
 Point at: the TravelExpense usage notes, the line "Answer them yourself".
 Before those notes the assistant stopped at the first chip and told the
@@ -155,29 +156,35 @@ user to click it in the web app.
 
 ### Scene 6. Same day, end of the showcase. Settle it
 
-> **The trip is done. Settle today's Seoul trip: KTX Osong to Seoul one way 18,500 won, taxi from Seoul Station to the Bizplay office 12,000 won because I carried the demo equipment, no receipt images. Submit it to 김도하.**
+> **The trip is done. Settle today's Seoul trip: express bus from Cheongju Intercity Bus Terminal to Seoul Express Bus Terminal one way 9,300 won, standard class, no receipt image. Submit it to 김도하.**
 
 [The long one. `settlementChat` with the period; the assistant picks
-today's plan from the list (2026-출장계획서-1738 once 김도하 has approved
-it), picks 교통비, then 기타증빙, then 직접 경비 입력; describes the KTX
-fare in one sentence, confirms the preview, says "No image, register it
-without one". The taxi goes in as 기타비용, not 교통비: this company has
-policy amounts only for KTX, SRT, air and lodging, so a taxi under 교통비
-gets a policy of 0 and BizPlay refuses to file it. Then receipts-done,
+today's plan from the list, picks the expense type, then 기타증빙, then
+직접 경비 입력; describes the bus fare in one sentence, confirms the
+preview, says "No image, register it without one". Then receipts-done,
 submit, confirm 김도하 as the approver and say there is no one else. The
-agent files it and returns the document number. Total 30,500원 plus the
+agent files it and returns the document number. Total 9,300원 plus the
 automatic 40,000원 daily allowance.]
 
-This exact sequence was run on 24 Sep through the AskDocs connection as
-the AI client, with a token, against the approved plan 1745, and produced
-**2026-출장정산서-1746** (KTX 18,500 under the 30,000 policy, taxi 12,000
-at actual cost, approver 김도하, waiting for approval). The TravelExpense
-notes and the settlementChat description carry the taxi rule, so the
-assistant does not need to be told.
+One thing to settle before the day. This company's BizPlay policy has
+amounts only for KTX, SRT, air and lodging. A bus entered under 교통비
+gets a policy of 0, the agent then insists on splitting the excess, and a
+split of a 0-policy line makes a 0-won line that BizPlay rejects. Two ways
+out, pick one:
+
+- Add an express-bus rule (BUS) to the domestic trip policy in BizPlay,
+  say 30,000원 per day like KTX. Then the bus goes under 교통비 with a
+  policy amount and the flow is the plain one above. This is the better
+  demo, since the policy check is visible.
+- Leave the policy as it is. The TravelExpense notes already tell the
+  assistant to register a bus or taxi as 기타비용 (actual cost) instead,
+  which files without a split. That was verified on 24 Sep with a taxi:
+  **2026-출장정산서-1746**, KTX 18,500 under policy plus taxi 12,000 at
+  actual cost, approver 김도하.
 
 Point at: the Audit Log, a dozen calls in a row, one person, one company.
-Then back to scene 4: the taxi rule the bot quoted is the reason written
-on the expense. Two systems, one answer.
+Then back to scene 4: the bus rule the bot quoted is the rule the
+settlement applied. Two systems, one answer.
 
 ### Scene 7. Tell the team
 
@@ -215,6 +222,6 @@ different answer, nothing configured in claude.ai.
 
 After scene 6:
 
-> **Draw one chart of today's trip: KTX, taxi and the daily allowance as bars, the rulebook standard fare as a line, and the settlement total in the title.**
+> **Draw one chart of today's trip: the bus fare and the daily allowance as bars, the rulebook limits as a line, and the settlement total in the title.**
 
 claude.ai draws it from the numbers already in the conversation.
