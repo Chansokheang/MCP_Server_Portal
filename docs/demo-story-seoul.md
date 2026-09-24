@@ -133,7 +133,7 @@ the assistant never asked "which bot?".
 
 ### Scene 5. File the trip plan for today
 
-> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
+> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
 [`planChat`, several turns the assistant holds on its own: it states the
 traveler, destination, date and purpose, answers "no one else travels",
