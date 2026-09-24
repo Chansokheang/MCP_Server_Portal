@@ -133,22 +133,21 @@ the assistant never asked "which bot?".
 
 ### Scene 5. File the trip plan for today
 
-> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, by express bus from Cheongju Intercity Bus Terminal to Seoul Express Bus Terminal and back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
+> **File a domestic trip plan for today, this morning: Seoul, Bizplay head office, back the same day, purpose "MCP gateway showcase for the Bizplay AI collaboration project". Send it to 김도하 for approval.**
 
 [`planChat`, several turns the assistant holds on its own: it states the
-traveler, destination, date, route and purpose, answers "no one else
-travels", picks 비즈플레이 as the route stop, names 김도하 at the
+traveler, destination, date and purpose, answers "no one else travels",
+and at the route question picks 비즈플레이 from the agent's own list of
+registered sites, so no route is typed by anyone. It names 김도하 at the
 approval-line question and says there is no one else to add. The agent
 then reports SUBMIT_REQUESTED, and the assistant calls `createPlan` on the
 session. The reply: filed, waiting for 김도하.]
 
-The same conversation, with the KTX route, was run through the gateway
-on 23 Sep and produced **2026-출장계획서-1738** for 30 Sep, approver
-김도하, status DRAFTED. That plan says train from Osong; with the bus
-route in the story, file a fresh plan live (the route is geocoded from the
-opening line) or have 김도하 approve 1738 and accept that its route says
-train. If 김도하 is in the room, the live filing is the moment to approve
-it on a phone.
+The same conversation was run through the gateway on 23 Sep and produced
+**2026-출장계획서-1738** for 30 Sep, approver 김도하, status DRAFTED.
+Either have 김도하 approve that one before the day and skip to scene 6,
+or file a second one live; both work. If 김도하 is in the room, the live
+filing is the moment to approve it on a phone.
 
 Point at: the TravelExpense usage notes, the line "Answer them yourself".
 Before those notes the assistant stopped at the first chip and told the
@@ -156,7 +155,7 @@ user to click it in the web app.
 
 ### Scene 6. Same day, end of the showcase. Settle it
 
-> **The trip is done. Settle today's Seoul trip: express bus from Cheongju Intercity Bus Terminal to Seoul Express Bus Terminal one way 9,300 won, standard class, no receipt image. Submit it to 김도하.**
+> **The trip is done. Settle today's Seoul trip: express bus from Cheongju Intercity Bus Terminal to Seoul Express Bus Terminal one way 17,200 won, premium class, no receipt image. Submit it to 김도하.**
 
 [The long one. `settlementChat` with the period; the assistant picks
 today's plan from the list, picks the expense type, then 기타증빙, then

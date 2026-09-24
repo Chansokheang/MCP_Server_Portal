@@ -20,7 +20,7 @@ Same scenes as demo-story-seoul.md, the line to say in Korean.
 
 **Scene 5. File the trip plan for today**
 
-> 오늘 2026년 9월 30일 국내 출장 계획서 올려줘: 서울 비즈플레이 본사, 청주시외버스터미널에서 고속버스로 서울고속버스터미널까지 당일 왕복, 목적은 "비즈플레이 AI 협업 프로젝트 MCP 게이트웨이 시연". 결재는 김도하에게.
+> 오늘 2026년 9월 30일 국내 출장 계획서 올려줘: 서울 비즈플레이 본사, 당일 복귀, 목적은 "비즈플레이 AI 협업 프로젝트 MCP 게이트웨이 시연". 결재는 김도하에게.
 
 **Scene 6. Same day, end of the showcase. Settle it**
 
