@@ -16,7 +16,7 @@ Same scenes as demo-story-seoul.md, the line to say in Korean.
 
 **Scene 4. What does the rulebook allow?**
 
-> 9월 30일에 청주시외버스터미널에서 고속버스로 서울고속버스터미널까지 가서 비즈플레이에 당일 출장을 가고, 시연 장비를 들고 가. 일반 직원이야. 가기 전에 뭘 해야 하고, 일비는 얼마고, 버스는 어떤 등급을 타도 되고, 터미널에서 사무실까지 택시를 타도 돼?
+> 9월 30일에 오송에서 KTX로 서울 비즈플레이에 당일 출장을 가고, 시연 장비를 들고 가. 일반 직원이야. 가기 전에 뭘 해야 하고, 일비는 얼마고, KTX 좌석은 어떤 등급이고, 서울역에서 사무실까지 택시를 타도 돼?
 
 **Scene 5. File the trip plan for today**
 
@@ -24,7 +24,7 @@ Same scenes as demo-story-seoul.md, the line to say in Korean.
 
 **Scene 6. Same day, end of the showcase. Settle it**
 
-> 출장 끝났어. 오늘 서울 출장 정산해줘: 청주시외버스터미널-서울고속버스터미널 고속버스 편도 9,300원, 일반, 영수증 이미지 없음. 김도하에게 상신해줘.
+> 출장 끝났어. 오늘 서울 출장 정산해줘: 오송-서울 KTX 편도 18,500원, 일반실, 영수증 이미지 없음. 김도하에게 상신해줘.
 
 **Scene 7. Tell the team**
 
@@ -36,4 +36,4 @@ Same scenes as demo-story-seoul.md, the line to say in Korean.
 
 **A closing visual (optional)**
 
-> 오늘 출장을 차트 하나로 그려줘: 버스 요금과 일비를 막대로, 규정 한도를 선으로, 제목에 정산 총액.
+> 오늘 출장을 차트 하나로 그려줘: KTX 요금과 일비를 막대로, 규정 한도를 선으로, 제목에 정산 총액.
