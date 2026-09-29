@@ -217,6 +217,7 @@ def save(state: dict) -> None:
     path = state_path()
     with _lock:
         path.parent.mkdir(parents=True, exist_ok=True)
+        _keep_newer_connections(state, path)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
         # On Windows a sync client or antivirus may hold the file for a moment; the rename then fails
@@ -229,6 +230,28 @@ def save(state: dict) -> None:
                 if attempt == 5:
                     raise
                 time.sleep(0.05 * (attempt + 1))
+
+
+def _keep_newer_connections(state: dict, path: Path) -> None:
+    """A copy of the state read before a token refresh must not put the old tokens back.
+
+    Every writer saves the whole state, and a rotated refresh token that is overwritten by its
+    predecessor ends the link for good. So a linked account already on disk with a later refresh
+    or connect time wins over the one being saved. Links missing from `state` stay removed.
+    """
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8")).get("user_connections", {})
+    except (OSError, ValueError):
+        return
+
+    def stamp(record: dict) -> float:
+        return max(record.get("refreshed_at") or 0, record.get("connected_at") or 0)
+
+    for user_id, per_user in state.get("user_connections", {}).items():
+        for pid, record in per_user.items():
+            other = stored.get(user_id, {}).get(pid)
+            if isinstance(other, dict) and isinstance(record, dict) and stamp(other) > stamp(record):
+                per_user[pid] = other
 
 
 def reset() -> dict:

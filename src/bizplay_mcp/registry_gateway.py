@@ -367,7 +367,9 @@ class GovernanceMiddleware(Middleware):
                 user_token = await oauth.access_token_for(state, provider, principal.user_id)
             except oauth.OAuthError as exc:
                 audit.record(principal.user_id, name, arguments, "error", f"token refresh failed: {exc}"[:200], via=via)
-                raise ToolError(f"{provider['name']}: your linked account needs to be connected again ({exc})") from None
+                raise ToolError(f"{provider['name']}: your linked account needs to be connected again ({exc}). "
+                                f"In the Bizplay MCP portal open {provider['name']}, then Connect account; "
+                                "the same conversation works again right after.") from None
             if not user_token:
                 reason = (f"user '{principal.user_id}' has not connected a {provider['name']} account. "
                           f"Link it in the Bizplay MCP portal: open {provider['name']}, then Connect account.")

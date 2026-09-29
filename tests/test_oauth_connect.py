@@ -1,5 +1,6 @@
 """Per-user OAuth: the gateway links each user's account on a backend and sends that user's token."""
 
+import asyncio
 import base64
 import hashlib
 import time
@@ -32,6 +33,8 @@ class AuthServer:
         self.codes: dict[str, tuple[str, str]] = {}   # code -> (user, challenge)
         self.issued = 0
         self.refreshed = 0
+        self.rotate = False                           # True: every refresh token works once
+        self.spent: set[str] = set()
 
     def issue_code(self, authorization_url: str, user: str) -> tuple[str, str]:
         """What the user's browser would do: sign in at the auth server, get a code back."""
@@ -59,12 +62,18 @@ class AuthServer:
             if expected != challenge:
                 return JSONResponse({"error": "invalid_grant"}, status_code=400)
         elif form["grant_type"] == "refresh_token":
+            if form["refresh_token"] in self.spent:
+                return JSONResponse({"error": "invalid_grant", "error_description": "Invalid refresh token"}, status_code=400)
             user = form["refresh_token"].split(":")[1]
             self.refreshed += 1
+            if self.rotate:
+                self.spent.add(form["refresh_token"])
+                await asyncio.sleep(0.05)  # long enough for calls made side by side to overlap
         else:
             return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
         self.issued += 1
-        return JSONResponse({"access_token": f"at:{user}:{self.issued}", "refresh_token": f"rt:{user}", "token_type": "Bearer",
+        refresh = f"rt:{user}:{self.issued}" if self.rotate else f"rt:{user}"
+        return JSONResponse({"access_token": f"at:{user}:{self.issued}", "refresh_token": refresh, "token_type": "Bearer",
                              "expires_in": 3600, "scope": "tasks:read"})
 
 
@@ -174,6 +183,59 @@ async def test_expired_token_is_refreshed_silently(admin, auth_server, items_api
     assert r.structured_content["token"] == "at:emp001:2" and auth_server.refreshed == 1
     stored = policy_store.load()["user_connections"]["emp001"][items_api]
     assert stored["access_token"] == "at:emp001:2" and stored["expires_at"] > time.time() + 3000 and stored["refreshed_at"]
+
+
+async def test_calls_side_by_side_refresh_once(admin, auth_server, items_api, as_user):
+    """An agent fires several tools at once; with rotating refresh tokens only one refresh may happen."""
+    auth_server.rotate = True
+    await link(admin, auth_server, items_api, "emp001")
+    state = policy_store.load()
+    state["user_connections"]["emp001"][items_api]["expires_at"] = time.time() - 1
+    policy_store.save(state)
+
+    as_user("emp001")
+    async with Client(gateway()) as c:
+        results = await asyncio.gather(*(c.call_tool("items_api_listItems", {}) for _ in range(4)))
+    assert {r.structured_content["token"] for r in results} == {"at:emp001:2"} and auth_server.refreshed == 1
+    assert policy_store.load()["user_connections"]["emp001"][items_api]["refresh_token"] == "rt:emp001:2"
+
+
+async def test_older_copy_of_the_state_does_not_put_spent_tokens_back(admin, auth_server, items_api, as_user):
+    auth_server.rotate = True
+    await link(admin, auth_server, items_api, "emp001")
+    state = policy_store.load()
+    state["user_connections"]["emp001"][items_api]["expires_at"] = time.time() - 1
+    policy_store.save(state)
+    before = policy_store.load()  # what a portal request or another call holds while the refresh runs
+
+    as_user("emp001")
+    async with Client(gateway()) as c:
+        await c.call_tool("items_api_listItems", {})
+    before["security"]["note"] = "saved after the refresh"
+    policy_store.save(before)
+    stored = policy_store.load()
+    assert stored["security"]["note"] == "saved after the refresh"
+    assert stored["user_connections"]["emp001"][items_api]["refresh_token"] == "rt:emp001:2"
+
+    stored["user_connections"]["emp001"][items_api]["expires_at"] = time.time() - 1
+    policy_store.save(stored)
+    async with Client(gateway()) as c:
+        assert (await c.call_tool("items_api_listItems", {})).structured_content["token"] == "at:emp001:3"
+
+
+async def test_spent_refresh_token_says_where_to_reconnect(admin, auth_server, items_api, as_user):
+    auth_server.rotate = True
+    await link(admin, auth_server, items_api, "emp001")
+    state = policy_store.load()
+    record = state["user_connections"]["emp001"][items_api]
+    record["expires_at"] = time.time() - 1
+    auth_server.spent.add(record["refresh_token"])
+    policy_store.save(state)
+
+    as_user("emp001")
+    async with Client(gateway()) as c:
+        with pytest.raises(ToolError, match="Invalid refresh token.*open Items API, then Connect account"):
+            await c.call_tool("items_api_listItems", {})
 
 
 async def test_disconnect_revokes_access_at_once(admin, auth_server, items_api, as_user):

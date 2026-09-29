@@ -20,10 +20,13 @@ here. Production keeps them in a vault.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
+import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -210,14 +213,67 @@ async def access_token_for(state: dict, provider: dict, user_id: str) -> str | N
     record = connection(state, provider["id"], user_id)
     if not record:
         return None
-    if record.get("expires_at") and record["expires_at"] < time.time() + REFRESH_LEEWAY:
-        if not record.get("refresh_token"):
-            return None
-        doc = await _token_request(provider["oauth"], {"grant_type": "refresh_token",
-                                                       "refresh_token": record["refresh_token"]})
-        record = _store(state, provider["id"], user_id, doc, previous=record)
-        policy_store.save(state)
-    return record["access_token"]
+    if not _expired(record):
+        return record["access_token"]
+    # One refresh at a time per linked account. Auth servers that rotate refresh tokens accept each
+    # one once: two calls refreshing side by side, or a refresh with a copy of the state read before
+    # another one finished, would present a spent token and lose the link.
+    pid = provider["id"]
+    async with _refresh_locks.setdefault((user_id, pid), asyncio.Lock()), _file_lock(f"refresh-{user_id}-{pid}"):
+        fresh = policy_store.load()
+        latest = connection(fresh, pid, user_id)
+        if not latest:
+            return None  # disconnected while this call waited
+        if _expired(latest):
+            if not latest.get("refresh_token"):
+                return None
+            doc = await _token_request(provider["oauth"], {"grant_type": "refresh_token",
+                                                           "refresh_token": latest["refresh_token"]})
+            fresh = policy_store.load()  # the request took a while; write into what is stored now
+            latest = _store(fresh, pid, user_id, doc, previous=latest)
+            policy_store.save(fresh)
+        # The caller may save its own copy later: it must carry the current tokens.
+        state.setdefault("user_connections", {}).setdefault(user_id, {})[pid] = latest
+    return latest["access_token"]
+
+
+def _expired(record: dict) -> bool:
+    return bool(record.get("expires_at")) and record["expires_at"] < time.time() + REFRESH_LEEWAY
+
+
+_refresh_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+@asynccontextmanager
+async def _file_lock(name: str, wait: float = 20.0, stale: float = 30.0):
+    """The same lock across processes: portal and gateways share one state file.
+
+    A lock file older than `stale` seconds belongs to a process that died. After `wait` seconds
+    the caller goes ahead anyway: a slow refresh must not block every call for good.
+    """
+    path = policy_store.state_path().parent / f".{name}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline, held = time.time() + wait, False
+    while time.time() < deadline:
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            held = True
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale:
+                    path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                continue
+            await asyncio.sleep(0.1)
+        except OSError:
+            break  # a directory that cannot hold lock files: the in-process lock still applies
+    try:
+        yield
+    finally:
+        if held:
+            path.unlink(missing_ok=True)
 
 
 async def listing_token(state: dict, provider: dict) -> str | None:
