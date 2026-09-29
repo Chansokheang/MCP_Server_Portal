@@ -238,6 +238,41 @@ async def test_spent_refresh_token_says_where_to_reconnect(admin, auth_server, i
             await c.call_tool("items_api_listItems", {})
 
 
+async def test_unused_links_are_refreshed_in_the_background(admin, auth_server, items_api):
+    """Nobody calls a tool for days; the link must not be left to expire."""
+    auth_server.rotate = True
+    await link(admin, auth_server, items_api, "emp001")
+    await link(admin, auth_server, items_api, "emp002")
+    assert await oauth.refresh_due(within=360) == {"refreshed": 0, "failed": 0}, "an hour left: nothing to do"
+
+    state = policy_store.load()
+    state["user_connections"]["emp001"][items_api]["expires_at"] = time.time() + 200  # before the next round
+    policy_store.save(state)
+    assert await oauth.refresh_due(within=360) == {"refreshed": 1, "failed": 0}
+    stored = policy_store.load()["user_connections"]
+    assert stored["emp001"][items_api]["refresh_token"] == "rt:emp001:3" and stored["emp001"][items_api]["expires_at"] > time.time() + 3000
+    assert stored["emp002"][items_api]["refresh_token"] == "rt:emp002:2", "untouched"
+
+
+async def test_refused_link_is_marked_and_left_alone(admin, auth_server, items_api):
+    auth_server.rotate = True
+    await link(admin, auth_server, items_api, "emp001")
+    state = policy_store.load()
+    record = state["user_connections"]["emp001"][items_api]
+    record["expires_at"] = time.time() - 1
+    auth_server.spent.add(record["refresh_token"])
+    policy_store.save(state)
+
+    assert await oauth.refresh_due(within=360) == {"refreshed": 0, "failed": 1}
+    listed = (await admin.get(f"/api/registry/{items_api}/connections")).json()["items"]
+    assert "Invalid refresh token" in listed[0]["refresh_error"]
+    assert await oauth.refresh_due(within=360) == {"refreshed": 0, "failed": 0}, "no second try with a refused token"
+
+    await link(admin, auth_server, items_api, "emp001")
+    listed = (await admin.get(f"/api/registry/{items_api}/connections")).json()["items"]
+    assert not listed[0]["refresh_error"], "a new sign-in clears it"
+
+
 async def test_disconnect_revokes_access_at_once(admin, auth_server, items_api, as_user):
     await link(admin, auth_server, items_api, "emp001")
     assert (await admin.delete(f"/api/registry/{items_api}/connections/emp001")).status_code == 200

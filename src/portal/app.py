@@ -15,6 +15,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -1572,7 +1573,12 @@ class PortalWithGateway:
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "lifespan":
-            return await self.gateway(scope, receive, send)
+            # Linked accounts are refreshed in the background for as long as the process runs.
+            keeper = asyncio.create_task(oauth.keep_links_fresh())
+            try:
+                return await self.gateway(scope, receive, send)
+            finally:
+                keeper.cancel()
         if scope["type"] == "http" and (scope["path"] == "/mcp" or scope["path"].startswith("/mcp/")):
             return await self.gateway(scope, receive, send)
         return await self.portal(scope, receive, send)

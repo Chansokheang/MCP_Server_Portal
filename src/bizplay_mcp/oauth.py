@@ -204,7 +204,7 @@ def connection(state: dict, provider_id: str, user_id: str) -> dict | None:
     return state.get("user_connections", {}).get(user_id, {}).get(provider_id)
 
 
-async def access_token_for(state: dict, provider: dict, user_id: str) -> str | None:
+async def access_token_for(state: dict, provider: dict, user_id: str, leeway: float = REFRESH_LEEWAY) -> str | None:
     """A valid access token for this user on this backend, refreshed if needed.
 
     Returns None when the user has not linked an account. Writes the state
@@ -213,7 +213,7 @@ async def access_token_for(state: dict, provider: dict, user_id: str) -> str | N
     record = connection(state, provider["id"], user_id)
     if not record:
         return None
-    if not _expired(record):
+    if not _expired(record, leeway):
         return record["access_token"]
     # One refresh at a time per linked account. Auth servers that rotate refresh tokens accept each
     # one once: two calls refreshing side by side, or a refresh with a copy of the state read before
@@ -224,11 +224,18 @@ async def access_token_for(state: dict, provider: dict, user_id: str) -> str | N
         latest = connection(fresh, pid, user_id)
         if not latest:
             return None  # disconnected while this call waited
-        if _expired(latest):
+        if _expired(latest, leeway):
             if not latest.get("refresh_token"):
                 return None
-            doc = await _token_request(provider["oauth"], {"grant_type": "refresh_token",
-                                                           "refresh_token": latest["refresh_token"]})
+            try:
+                doc = await _token_request(provider["oauth"], {"grant_type": "refresh_token",
+                                                               "refresh_token": latest["refresh_token"]})
+            except OAuthError as exc:
+                if "invalid_grant" in str(exc):
+                    # The auth server no longer accepts this link: only a new sign-in repairs it.
+                    latest["refresh_error"] = str(exc)[:200]
+                    policy_store.save(fresh)
+                raise
             fresh = policy_store.load()  # the request took a while; write into what is stored now
             latest = _store(fresh, pid, user_id, doc, previous=latest)
             policy_store.save(fresh)
@@ -237,8 +244,44 @@ async def access_token_for(state: dict, provider: dict, user_id: str) -> str | N
     return latest["access_token"]
 
 
-def _expired(record: dict) -> bool:
-    return bool(record.get("expires_at")) and record["expires_at"] < time.time() + REFRESH_LEEWAY
+def _expired(record: dict, leeway: float = REFRESH_LEEWAY) -> bool:
+    return bool(record.get("expires_at")) and record["expires_at"] < time.time() + leeway
+
+
+async def refresh_due(within: float) -> dict[str, int]:
+    """Refresh every linked account whose access token expires within `within` seconds.
+
+    Links the auth server has refused are skipped: they need a new sign-in, not another try.
+    """
+    state = policy_store.load()
+    done = {"refreshed": 0, "failed": 0}
+    for user_id, per_user in list(state.get("user_connections", {}).items()):
+        for pid, record in list(per_user.items()):
+            provider = state["providers"].get(pid)
+            if (not provider or provider.get("auth_mode") != "oauth" or record.get("type") == "login"
+                    or not record.get("refresh_token") or record.get("refresh_error") or not _expired(record, within)):
+                continue
+            try:
+                await access_token_for(state, provider, user_id, leeway=within)
+                done["refreshed"] += 1
+            except (OAuthError, httpx.HTTPError):
+                done["failed"] += 1
+    return done
+
+
+async def keep_links_fresh(interval: float | None = None) -> None:
+    """Runs for the life of the process: no linked account is left to expire, used or not.
+
+    Auth servers drop refresh tokens that sit unused; an account linked last week must still
+    work today. Each round refreshes what would expire before the next round.
+    """
+    interval = interval or float(os.environ.get("BIZPLAY_REFRESH_INTERVAL", "300"))
+    while True:
+        try:
+            await refresh_due(interval + REFRESH_LEEWAY)
+        except Exception:  # noqa: BLE001  a bad round must not end the loop
+            pass
+        await asyncio.sleep(interval)
 
 
 _refresh_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -318,5 +361,6 @@ def public_connections(state: dict, provider_id: str) -> list[dict]:
             out.append({"user_id": user_id, "connected_at": record["connected_at"], "expires_at": record.get("expires_at"),
                         "refreshed_at": record.get("refreshed_at"), "scope": record.get("scope", ""),
                         "kind": record.get("type", "oauth"), "username": record.get("username"),
-                        "can_refresh": bool(record.get("refresh_token")) or record.get("type") == "login"})
+                        "can_refresh": bool(record.get("refresh_token")) or record.get("type") == "login",
+                        "refresh_error": record.get("refresh_error", "")})
     return sorted(out, key=lambda x: x["user_id"])

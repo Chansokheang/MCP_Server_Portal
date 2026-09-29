@@ -50,7 +50,7 @@ const I18N = (() => {
     "MCP server": "MCP 서버", "Member": "멤버", "Managed by admin": "관리자가 관리", "Required": "필수", "Not required": "불필요",
     "Active": "활성", "Expired": "만료됨", "Revoked": "폐기됨", "Draft": "초안", "Published": "게시됨", "Deployed": "배포됨", "Undeployed": "배포 해제됨",
     "denied": "거부", "error": "오류", "pass": "통과", "fail": "실패", "Everyone": "모두", "employee": "직원", "manager": "매니저",
-    "no groups": "그룹 없음", "none": "없음", "never": "없음", "Denied": "거부됨", "Errors": "오류", "Succeeded": "성공", "All calls": "전체 호출",
+    "no groups": "그룹 없음", "none": "없음", "never": "없음", "needs a new sign-in": "다시 로그인 필요", "Denied": "거부됨", "Errors": "오류", "Succeeded": "성공", "All calls": "전체 호출",
     "Live": "실시간", "Registry live": "레지스트리 실시간", "Agent token required": "에이전트 토큰 필수", "Auth server configured": "인증 서버 설정됨",
     "Auth server not configured": "인증 서버 미설정", "Login endpoint configured": "로그인 엔드포인트 설정됨", "Login endpoint not configured": "로그인 엔드포인트 미설정",
     "Open to every entitled caller": "권한 있는 모든 호출자에게 개방", "No token: every caller is the demo user": "토큰 없음: 모든 호출자가 데모 사용자",
