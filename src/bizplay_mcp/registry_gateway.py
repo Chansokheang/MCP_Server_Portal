@@ -61,6 +61,26 @@ async def _inject_user_token(request: httpx2.Request) -> None:
         request.headers["Authorization"] = f"Bearer {token}"
 
 
+def _follow_base_url(provider: dict) -> Callable:
+    """httpx event hook: a base URL changed in the portal applies to the next call, not the next restart.
+
+    The client is built once, when the backend is mounted, around the address it had then.
+    """
+    pid, mounted = provider["id"], httpx2.URL(provider["base_url"])
+
+    async def on_request(request: httpx2.Request) -> None:
+        current = (policy_store.load()["providers"].get(pid) or {}).get("base_url") or ""
+        if not current or current.rstrip("/") == str(mounted).rstrip("/"):
+            return
+        target = httpx2.URL(current)
+        rest = request.url.raw_path[len(mounted.raw_path.rstrip(b"/")):]
+        request.url = request.url.copy_with(scheme=target.scheme, host=target.host, port=target.port,
+                                            raw_path=target.raw_path.rstrip(b"/") + rest)
+        request.headers["Host"] = target.netloc.decode("ascii")
+
+    return on_request
+
+
 def _login_hooks(provider: dict) -> dict:
     """httpx event hooks for a login-endpoint backend: send the token its way, forget it on 401."""
     pid = provider["id"]
@@ -497,7 +517,9 @@ class ProviderRegistry:
             if self.mcp_client_factory:
                 factory = lambda: self.mcp_client_factory(provider, call_headers())  # noqa: E731
             else:
-                factory = lambda: UpstreamProxyClient(specs.mcp_transport(provider["base_url"], call_headers()))  # noqa: E731
+                # The address as stored now: it may have been changed in the portal since the mount.
+                factory = lambda: UpstreamProxyClient(specs.mcp_transport(  # noqa: E731
+                    (policy_store.load()["providers"].get(pid) or provider)["base_url"], call_headers()))
 
             async def prepare() -> str | None:
                 fresh = policy_store.load()
@@ -512,10 +534,12 @@ class ProviderRegistry:
             # Older registrations stored raw operationIds; serve what FastMCP names.
             if specs.reconcile_tool_names(provider):
                 changed = True
+            hooks = _login_hooks(provider) if provider.get("auth_mode") == "login" else {"request": [_inject_user_token]}
+            hooks["request"] = [_follow_base_url(provider), *hooks["request"]]
             client = httpx2.AsyncClient(
                 base_url=provider["base_url"], headers=headers, timeout=30.0,
                 transport=self.transport_factory(provider) if self.transport_factory else None,
-                event_hooks=_login_hooks(provider) if provider.get("auth_mode") == "login" else {"request": [_inject_user_token]},
+                event_hooks=hooks,
             )
             # validate_output=False: real-world specs often drift from real responses
             # (e.g. Spring's "200 OK" status enum vs an actual "OK"). A strict output

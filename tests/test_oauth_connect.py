@@ -82,7 +82,7 @@ async def items(request: Request):
     token = request.headers.get("authorization", "").removeprefix("Bearer ")
     if not token.startswith("at:"):
         return JSONResponse({"error": "sign in"}, status_code=401)
-    return JSONResponse({"owner": token.split(":")[1], "token": token, "items": ["invoice-1"]})
+    return JSONResponse({"owner": token.split(":")[1], "token": token, "items": ["invoice-1"], "host": request.headers.get("host")})
 
 
 protected_api = Starlette(routes=[Route("/items", items)])
@@ -271,6 +271,19 @@ async def test_refused_link_is_marked_and_left_alone(admin, auth_server, items_a
     await link(admin, auth_server, items_api, "emp001")
     listed = (await admin.get(f"/api/registry/{items_api}/connections")).json()["items"]
     assert not listed[0]["refresh_error"], "a new sign-in clears it"
+
+
+async def test_changed_base_url_applies_to_the_next_call(admin, auth_server, items_api, as_user):
+    """The backend moved; the address is corrected in the portal while the gateway keeps running."""
+    await link(admin, auth_server, items_api, "emp001")
+    as_user("emp001")
+    gw = gateway()
+    async with Client(gw) as c:
+        assert (await c.call_tool("items_api_listItems", {})).structured_content["host"] == "items.test"
+    r = await admin.patch(f"/api/registry/{items_api}", json={"base_url": "http://moved.test:8082"})
+    assert r.status_code == 200 and r.json()["base_url"] == "http://moved.test:8082", r.text
+    async with Client(gw) as c:
+        assert (await c.call_tool("items_api_listItems", {})).structured_content["host"] == "moved.test:8082"
 
 
 async def test_disconnect_revokes_access_at_once(admin, auth_server, items_api, as_user):
